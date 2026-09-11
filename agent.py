@@ -234,6 +234,10 @@ def build_observation_text(observation):
         box = el.get('box') or {}
         if box.get('w'):
             parts.append(f"at x{box.get('x')} y{box.get('y')}")
+        elif 'box' in el and el['box'] is None:
+            # The harness measured this frame and could not place it. Saying so
+            # is safer than a coordinate that points at the wrong row.
+            parts.append('position unknown')
         if el.get('checked'):
             parts.append('ALREADY SELECTED')
         if el.get('disabled'):

@@ -55,6 +55,7 @@ let refMap = new Map();     // global ref -> { frameId, ref } in that frame
 let frameIds = [0];
 let runOrigin = '';         // only frames from this origin are ever acted on
 let actionFrameId = 0;      // frame to send frame-wide actions such as scroll
+let activeFrameIds = [];    // frames that passed the origin check this step
 
 async function injectAll(tabId) {
   const injected = await chrome.scripting.executeScript({
@@ -67,6 +68,7 @@ async function injectAll(tabId) {
 async function observeAllFrames(tabId) {
   const merged = { elements: [], text: '', host: '', digest: '' };
   refMap = new Map();
+  activeFrameIds = [];
   let next = 1;
 
   for (const frameId of frameIds) {
@@ -82,17 +84,23 @@ async function observeAllFrames(tabId) {
     // so they never enter the action map the model chooses from.
     if (runOrigin && page.origin && page.origin !== runOrigin) continue;
 
+    // Remembered so the settle check later measures exactly these frames. If
+    // the two digests covered different frames they could never match, and
+    // every action would look as though it had landed instantly.
+    activeFrameIds.push(frameId);
     if (!merged.host) merged.host = page.host;
     if (page.text) merged.text += (merged.text ? '\n\n' : '') + page.text;
     merged.digest += page.digest;
-    const offset = page.frameOffset || { x: 0, y: 0 };
+    const offset = page.frameOffset || { x: 0, y: 0, exact: true };
     if (merged.elements.length === 0) actionFrameId = frameId;
     for (const el of page.elements) {
       refMap.set(next, { frameId, ref: el.ref });
       // Shift into whole-tab coordinates so the list agrees with the screenshot.
-      const box = el.box
+      // Where the offset could not be measured through every ancestor, the
+      // control stays usable by ref but reports no position at all.
+      const box = el.box && offset.exact !== false
         ? { ...el.box, x: el.box.x + offset.x, y: el.box.y + offset.y }
-        : el.box;
+        : null;
       merged.elements.push({ ...el, ref: next, box });
       next += 1;
       if (next > 300) break;
@@ -124,7 +132,8 @@ async function actOnRef(tabId, action) {
 
 async function digestNow(tabId) {
   let combined = '';
-  for (const frameId of frameIds) {
+  // Exactly the frames the last observation covered, in the same order.
+  for (const frameId of (activeFrameIds.length ? activeFrameIds : frameIds)) {
     try {
       const reply = await chrome.tabs.sendMessage(tabId, { type: 'digest' }, { frameId });
       if (reply) combined += reply.digest;
