@@ -170,28 +170,48 @@ class Action(BaseModel):
 
 
 def parse_action(raw):
-    """Pull the first valid JSON object out of the reply, tolerantly."""
+    """Pull the model's decision out of the reply, tolerantly.
+
+    Deliberately takes the LAST valid action object, not the first. Page text
+    reaches the model in the observation, so a page can contain something that
+    looks exactly like an action. If the model quotes that text -- while
+    refusing it, or while explaining what it saw -- the quoted object appears
+    before the real decision. Reading the first match would let the page choose
+    the action; reading the last takes the model's own conclusion.
+    """
     if not isinstance(raw, str):
         raise ValueError('The model returned no readable action. Retry this step.')
+
     decoder = json.JSONDecoder()
+    candidates = []
     for index, char in enumerate(raw):
-        if char == '{':
-            try:
-                value, _ = decoder.raw_decode(raw[index:])
-                action = Action.model_validate(value)
-            except (ValueError, ValidationError):
-                continue
-            if action.action not in ACTIONS:
-                raise ValueError(
-                    f'The model asked for "{action.action}", which is not an allowed action. '
-                    'Nothing was done.'
-                )
-            if action.action in ('fill', 'click', 'select') and action.ref is None:
-                raise ValueError('The model named no element to act on. Nothing was done.')
-            if action.action == 'scroll' and action.direction not in ('up', 'down'):
-                action.direction = 'down'
-            return action
-    raise ValueError('The model returned an invalid action format. Nothing was done.')
+        if char != '{':
+            continue
+        try:
+            value, _ = decoder.raw_decode(raw[index:])
+        except ValueError:
+            continue
+        if isinstance(value, dict) and 'action' in value:
+            candidates.append(value)
+
+    if not candidates:
+        raise ValueError('The model returned an invalid action format. Nothing was done.')
+
+    try:
+        action = Action.model_validate(candidates[-1])
+    except ValidationError:
+        raise ValueError('The model returned an invalid action format. Nothing was done.') from None
+
+    if action.action not in ACTIONS:
+        raise ValueError(
+            f'The model asked for "{action.action}", which is not an allowed action. '
+            'Nothing was done.'
+        )
+    if action.action in ('fill', 'click', 'select') and action.ref is None:
+        raise ValueError('The model named no element to act on. Nothing was done.')
+    if action.action == 'scroll' and action.direction not in ('up', 'down'):
+        action.direction = 'down'
+    return action
 
 
 def cost_value(usage):

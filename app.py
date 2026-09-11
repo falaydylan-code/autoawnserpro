@@ -24,6 +24,8 @@ import agent
 import store
 
 runs, tokens, attempts = {}, {}, {}
+# host -> addresses it first resolved to, so a later swap is visible
+_resolved_hosts: dict = {}
 creation_lock = asyncio.Lock()
 
 
@@ -178,10 +180,25 @@ async def safe_url(url):
             raise ValueError('This website is not enabled. Add its domain to ALLOWED_ASSIGNMENT_HOSTS on the backend.')
     try:
         addresses = await asyncio.get_running_loop().getaddrinfo(host, 443, type=socket.SOCK_STREAM)
-        if not addresses or any(not ipaddress.ip_address(a[4][0]).is_global for a in addresses):
+        resolved = {a[4][0] for a in addresses}
+        if not resolved or any(not ipaddress.ip_address(ip).is_global for ip in resolved):
             raise ValueError('Private network addresses are not supported.')
     except socket.gaierror:
         raise ValueError('Assignment domain could not be resolved. Check the URL.') from None
+
+    # A host that answers with a public address now can answer with an internal
+    # one a moment later, before the browser connects. The browser cannot be
+    # pinned to the address checked here, so instead the first answer is
+    # remembered and every later check for the same host must still overlap it.
+    # A host that starts pointing somewhere new is refused rather than followed.
+    known = _resolved_hosts.get(host)
+    if known is None:
+        _resolved_hosts[host] = resolved
+    elif not (known & resolved):
+        raise ValueError(
+            'This domain changed which server it points to during the session. '
+            'Refused, because that is how a public address is swapped for an internal one.'
+        )
     return url
 
 

@@ -74,9 +74,18 @@ is going.
 
 ## Limits
 
-Eight steps per question, 120 per run, and it stops on its own if three
-observations in a row come back identical. Spend is metered on the backend per
-network, not per install.
+Sixteen steps per question, 900 per run, and it stops on its own if four
+observations in a row come back identical. It also gives up after eight
+consecutive attempts to find the next question.
+
+Those are the real ceilings and they are deliberately generous, because a long
+set can run 60 questions or more. At roughly 3-5 model calls per question a full
+set costs somewhere around ten to fifteen cents. The hard limit on spending is
+on the backend: MAX_CALLS_PER_INVITE and MAX_COST_PER_INVITE, metered per
+network rather than per install.
+
+To make a run cheaper or shorter, lower STEP_BUDGET, SESSION_STEPS and
+NAV_BUDGET at the top of background.js.
 
 ## Costs
 
