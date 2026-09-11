@@ -1,0 +1,19 @@
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+data/
+*.csv
+.vercel/
+
+*.log
+
+*.zip
+
+# Generated: a copy of the app made only for uploading to Railway.
+# Reviewing it would mean reviewing the same code twice.
+deploy-source/
+
+# Local browser cache and build leftovers
+node_modules/
+*.pyc
