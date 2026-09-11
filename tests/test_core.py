@@ -395,3 +395,18 @@ def test_a_stable_host_is_not_refused(monkeypatch):
     monkeypatch.setattr(asyncio, 'get_running_loop', lambda: Loop())
     for _ in range(3):
         assert asyncio.run(app.safe_url('https://example.com/x'))
+
+
+def test_an_unmeasurable_position_is_stated_not_guessed():
+    """A partial frame offset would point the model at the wrong row.
+
+    Where the offset cannot be measured through every ancestor frame the
+    control stays usable by ref, but reports no coordinates at all.
+    """
+    import agent
+    text = agent.build_observation_text({'elements': [
+        {'ref': 1, 'role': 'radio', 'name': 'Option A', 'box': {'x': 10, 'y': 20, 'w': 12, 'h': 12}},
+        {'ref': 2, 'role': 'radio', 'name': 'Option B', 'box': None},
+    ], 'text': ''})
+    assert 'ref 1 | radio | name: Option A | at x10 y20' in text
+    assert 'ref 2 | radio | name: Option B | position unknown' in text

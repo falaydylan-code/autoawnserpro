@@ -117,20 +117,23 @@
      whole tab. Walk up the frame chain and add each offset so the two agree.
      Only reachable for same-origin frames, which are the only ones acted on. */
   function frameOffset() {
-    let x = 0, y = 0, win = window;
-    for (let depth = 0; depth < 10 && win !== win.parent; depth += 1) {
+    let x = 0, y = 0, win = window, exact = true;
+    for (let depth = 0; win !== win.parent; depth += 1) {
+      if (depth >= 10) { exact = false; break; }
       let rect;
       try {
         rect = win.frameElement && win.frameElement.getBoundingClientRect();
       } catch (error) {
-        break;                       // cross-origin parent; stop walking
+        rect = null;                 // cross-origin ancestor: cannot be measured
       }
-      if (!rect) break;
+      if (!rect) { exact = false; break; }
       x += rect.left;
       y += rect.top;
       win = win.parent;
     }
-    return { x: Math.round(x), y: Math.round(y) };
+    // A partial offset is worse than none: it would point the model at the
+    // wrong row with false confidence. Say so instead of guessing.
+    return { x: Math.round(x), y: Math.round(y), exact };
   }
 
   function observe() {
