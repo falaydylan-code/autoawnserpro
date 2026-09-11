@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Assignment Lab</title><link rel="stylesheet" href="/static/style.css"></head>
+<body>
+<header><a class="brand" href="/">a<span>l</span><b>Assignment Lab</b></a><div class="topright"><span class="badge">PUBLIC PREVIEW</span><button id="eth" class="eth off" type="button" aria-pressed="false" title="Browser control is off. Click to arm it.">ETH</button></div></header>
+<main>
+<div id="workspace">
+<div class="pagehead"><div><p class="eyebrow">BROWSER AGENT / MINIMAX</p><h1>Your testing desk.</h1><p>Open a session. Watch the work. Inspect the evidence.</p></div><span id="connection" class="badge">Connecting</span></div>
+<div id="notice" class="notice" hidden></div>
+<div class="layout"><aside>
+<section class="card"><div class="sectionhead"><h2>01 / Set up a session</h2></div>
+<label>Run mode<select id="mode"><option value="practice">Practice · no AI, no model cost</option><option value="practice_ai">Practice · MiniMax answers</option><option value="live">Real assignment · configured website</option></select></label>
+<p id="modeHelp" class="hint">Four built-in questions, including a graph. Fixture answers test the browser loop—not model accuracy.</p>
+<div id="modelBox" hidden><label>MiniMax model<select id="model"><option value="">Load the live model list</option></select></label><button id="loadModels" class="quiet">Refresh models</button></div>
+<div id="liveBox" hidden><label>Assignment URL<input id="url" type="url" placeholder="https://your-assignment-site/..." autocomplete="off"></label>
+<details><summary>Website controls · adapter settings</summary><p class="hint">The first site needs its controls mapped. CSS selectors identify page elements. The question region must contain its text, graph, and answer controls. A developer can provide these values.</p><div id="selectors"></div></details></div>
+<label>Questions per Start<input id="limit" type="number" min="1" max="100" value="40"></label>
+<label class="check"><input id="auto" type="checkbox"> Submit automatically at the end</label><p class="hint">Off means the agent stops for your final review.</p>
+<button id="open" class="primary wide">Open browser session →</button>
+</section>
+<section class="card"><h2>Setup checklist</h2><div id="checks"></div><p class="hint">Keys remain private on the backend.</p></section>
+</aside>
+<div class="work"><section class="card browsercard"><div class="sectionhead"><div><h2>02 / Browser workspace</h2><p id="stateText">No session open</p></div><span id="state" class="badge">IDLE</span></div>
+<div class="toolbar"><button id="start" class="primary" disabled>Start / Resume</button><button id="stop" disabled>Stop</button><button id="close" class="quiet" disabled>Close session</button><button id="inspect" disabled>Inspect question</button><button id="refreshPages" class="quiet" disabled>Refresh tabs</button><select id="pages" aria-label="Browser tab"><option value="0">Main tab</option></select></div>
+<div id="browserEmpty" class="browserempty"><div class="windowicon">▤</div><h3>Your browser will appear here.</h3><p>Cloud sessions have an interactive live view.<br>Local sessions open in a separate browser window.</p></div>
+<iframe id="live" title="Your isolated assignment browser" hidden allow="clipboard-read; clipboard-write" referrerpolicy="no-referrer"></iframe>
+<details id="preview" hidden><summary>Question capture preview (no model call)</summary><p id="previewText"></p><img id="previewImage" alt="Captured question and graph" style="width:100%;border:1px solid #d6ded5"></details><a id="externalLive" hidden target="_blank" rel="noopener noreferrer">Open browser view in a new tab ↗</a>
+</section>
+<div class="metrics"><div class="card"><span>VERIFIED ACTIONS</span><strong id="verified">0</strong></div><div class="card"><span>RECORDED MODEL COST</span><strong id="cost">$0.0000</strong></div><div class="card"><span>SESSION TIME LEFT</span><strong id="time">—</strong></div></div>
+<section class="card"><div class="sectionhead"><h2>03 / Activity</h2><span class="hint">Live updates</span></div><ol id="log" class="log"><li>Waiting for your first session.</li></ol></section>
+</div></div>
+<section class="card results"><div class="sectionhead"><div><h2>Question records</h2><p>Verified means the answer was entered successfully. It does not establish correctness.</p></div><button id="export" disabled>Export CSV ↓</button></div><div class="tablewrap"><table><thead><tr><th>#</th><th>Question</th><th>Answer</th><th>Confidence</th><th>Action</th><th>Cost</th></tr></thead><tbody id="results"><tr><td colspan="6">No answers recorded yet.</td></tr></tbody></table></div></section>
+<section class="card"><div class="sectionhead"><h2>Session history</h2><button id="historyRefresh" class="quiet">Refresh</button></div><div id="history">No previous sessions.</div></section>
+</div><div id="error" role="alert" hidden></div>
+</main><footer>Assignment Lab · Early testing build <span>One website at a time. Every action accounted for.</span></footer>
+<script src="/static/config.js"></script><script src="/static/app.js"></script></body></html>

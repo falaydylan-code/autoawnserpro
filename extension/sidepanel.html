@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Assignment Lab</title>
+<link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+
+<header>
+  <span class="brand">Assignment Lab</span>
+  <button id="eth" class="eth off" type="button" aria-pressed="false"
+          title="Browser control is off. Click to arm it.">ETH</button>
+</header>
+
+<main>
+  <p id="page" class="page">Open the assignment tab, then arm ETH.</p>
+  <p class="hint" style="margin:0 0 10px">ETH green means the agent may read pages. Chrome asks once, the first time you arm it.</p>
+
+  <div id="banner" class="banner" hidden></div>
+
+  <label class="check"><input id="advance" type="checkbox">
+    Keep going after each question</label>
+  <p class="hint" style="margin:2px 0 10px">Lets the agent press Next, Continue or a
+    confidence rating to reach the next question. It never hands in the assignment.</p>
+
+  <div class="controls">
+    <button id="start" class="primary" disabled>Read this page</button>
+    <button id="stop" disabled>Stop</button>
+  </div>
+
+  <div class="meters">
+    <div><span>QUESTIONS</span><strong id="questions">0</strong></div>
+    <div><span>STEPS</span><strong id="steps">0</strong></div>
+    <div><span>COST</span><strong id="cost">$0.0000</strong></div>
+  </div>
+
+  <div class="logbar">
+    <label class="check"><input id="showthink" type="checkbox" checked> Show model thinking</label>
+    <span class="grow"></span>
+    <button id="copylog" class="quiet">Copy log</button>
+  </div>
+  <ol id="log" class="log"><li class="muted">Nothing yet.</li></ol>
+
+  <details id="setup">
+    <summary>Setup</summary>
+    <label>Backend<input id="backend" type="url" spellcheck="false"></label>
+    <label>Model<input id="model" type="text" spellcheck="false" placeholder="minimax/minimax-m3"></label>
+    <label>Note for the agent (optional)<input id="note" type="text" maxlength="200" placeholder="e.g. answer in decimals"></label>
+    <button id="save">Save</button>
+    <p class="hint">Your API key never lives in this extension. Requests go to your
+      backend, which holds the key and meters the spend.</p>
+  </details>
+
+  <p class="hint">
+    The agent looks at the page each step and decides one action. It will not sign in,
+    enter passwords or payment details, accept banners, solve captchas, or submit your
+    assignment &mdash; submitting stays yours.
+  </p>
+</main>
+
+<script src="sidepanel.js"></script>
+</body>
+</html>
