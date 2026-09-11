@@ -20,6 +20,10 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 import store
 from settings import setting
 
+# Working-out is encouraged, so the reply needs room. At 3000 a considered
+# answer was being cut off mid-JSON and arriving as "invalid action format".
+MAX_OUTPUT_TOKENS = 8000
+
 MAX_ELEMENTS = 120
 MAX_PAGE_TEXT = 6000
 
@@ -140,29 +144,51 @@ and no units unless the question asks for them.
 
 DO NOT REDO WHAT IS DONE
 An element marked ALREADY SELECTED holds the answer that is currently chosen.
-Clicking it again changes nothing and wastes a step. If it is the answer you
-wanted, move on instead.
+A field listed with a value already contains that text. If either already
+matches your plan, that part is finished: move to the next part, or to the
+control that continues. Re-entering an answer that is already there changes
+nothing and wastes a step.
 
 VERIFY BEFORE MOVING ON
 The observation tells you whether your last action changed the page. If it did
 not change, do not repeat the same action. Try a different element or give_up
 with a reason.
 
+THINK BEFORE YOU ACT
+Every reply has a "working" field. Use it. Reason the question through there
+properly, at whatever length it takes, before you decide anything. Check
+yourself: if a first answer does not fit the sentence or the options, say so and
+reconsider. Working costs almost nothing; a wrong answer typed into a graded
+assignment costs the student.
+
+SOLVE THE WHOLE QUESTION AT ONCE, THEN EXECUTE IT
+When you read a question, work out every part of the answer before touching the
+page, and write it into "plan". A question with three blanks has three answers;
+decide all three now, not one at a time.
+
+The plan you wrote is given back to you on every following step for that same
+question. Once you have a plan, execute it. Do not solve the question again,
+and do not change your answer unless the page shows you were wrong. Re-deriving
+the answer on each step is how the same question ends up answered two different
+ways.
+
 REPLY FORMAT
 Reply with one JSON object and nothing else. No markdown fences, no prose.
 
-{"action":"read_check","has_question":true,"question":"...","kind":"multiple_choice|written|unknown","confidence":0-100,"reason":"one sentence"}
-{"action":"fill","ref":7,"text":"20","confidence":0-100,"reason":"one sentence"}
-{"action":"click","ref":12,"confidence":0-100,"reason":"one sentence"}
-{"action":"select","ref":4,"option":"Paris","confidence":0-100,"reason":"one sentence"}
-{"action":"scroll","direction":"down","reason":"one sentence"}
-{"action":"done","reason":"one sentence"}
-{"action":"give_up","reason":"one sentence"}
+{"action":"read_check","working":"...your reasoning...","has_question":true,"question":"...","kind":"multiple_choice|written|unknown","plan":"blank 1 = Cash; blank 2 = Receivable; blank 3 = Unearned","confidence":0-100,"reason":"short summary"}
+{"action":"fill","working":"...","ref":7,"text":"20","confidence":0-100,"reason":"short summary"}
+{"action":"click","working":"...","ref":12,"confidence":0-100,"reason":"short summary"}
+{"action":"select","working":"...","ref":4,"option":"Paris","confidence":0-100,"reason":"short summary"}
+{"action":"scroll","direction":"down","reason":"short summary"}
+{"action":"done","reason":"short summary"}
+{"action":"give_up","reason":"short summary"}
 """
 
 
 class Action(BaseModel):
     model_config = ConfigDict(extra='ignore')
+    working: str = Field(default='', max_length=6000)
+    plan: str = Field(default='', max_length=2000)
     action: str = Field(min_length=1, max_length=40)
     ref: int | None = Field(default=None, ge=0, le=10000)
     text: str = Field(default='', max_length=4000)
@@ -175,7 +201,7 @@ class Action(BaseModel):
     reason: str = Field(default='', max_length=2000)
 
 
-def parse_action(raw):
+def parse_action(raw, finish_reason=''):
     """Pull the model's decision out of the reply, tolerantly.
 
     Deliberately takes the LAST valid action object, not the first. Page text
@@ -201,6 +227,11 @@ def parse_action(raw):
             candidates.append(value)
 
     if not candidates:
+        if finish_reason == 'length':
+            raise ValueError(
+                f'The reply was cut off at the {MAX_OUTPUT_TOKENS}-token limit before it '
+                'finished, so no action could be read. Raise MAX_OUTPUT_TOKENS in agent.py '
+                'or use a less talkative model.')
         raise ValueError('The model returned an invalid action format. Nothing was done.')
 
     try:
@@ -235,6 +266,8 @@ def build_observation_text(observation):
         parts = [f"ref {el.get('ref')}", el.get('role', 'element')]
         if el.get('name'):
             parts.append('name: ' + str(el['name'])[:160])
+        if el.get('context'):
+            parts.append(str(el['context'])[:200])
         if el.get('value'):
             parts.append('value: ' + str(el['value'])[:160])
         box = el.get('box') or {}
@@ -286,6 +319,10 @@ def build_observation_text(observation):
             'Next, Proceed, Got it, or the close button on a reading panel -- and '
             'click it. Scroll if the control is out of view. Return done only if '
             'the screen genuinely says the assignment is finished.')
+    if observation.get('plan'):
+        context.append(
+            'THE PLAN YOU MADE FOR THIS QUESTION: ' + str(observation['plan'])[:2000]
+            + ' — carry it out. Do not solve the question again.')
     if observation.get('phase') == 'must_act':
         context.append(
             'YOU HAVE ALREADY READ THIS QUESTION. Do not return read_check again. '
@@ -326,7 +363,7 @@ async def decide(owner, observation, model, record=None, require=''):
         content.append({'type': 'image_url', 'image_url': {'url': shot}})
 
     body = {
-        'model': model, 'max_tokens': 3000, 'usage': {'include': True},
+        'model': model, 'max_tokens': MAX_OUTPUT_TOKENS, 'usage': {'include': True},
         'messages': [{'role': 'system', 'content': SYSTEM_PROMPT},
                      {'role': 'user', 'content': content}],
     }
@@ -358,9 +395,11 @@ async def decide(owner, observation, model, record=None, require=''):
                 store.settle_call(owner, cost)
                 raw = (data.get('choices') or [{}])[0].get('message', {}).get('content')
                 raw = raw.replace(key, '[redacted]') if isinstance(raw, str) else ''
+                finish_reason = (data.get('choices') or [{}])[0].get('finish_reason') or ''
                 record.update(cost=cost, input_tokens=usage.get('prompt_tokens'),
-                              output_tokens=usage.get('completion_tokens'), raw_reply=raw)
-                action = parse_action(raw)
+                              output_tokens=usage.get('completion_tokens'), raw_reply=raw,
+                              finish_reason=finish_reason)
+                action = parse_action(raw, finish_reason)
                 wrong_verb = (
                     (require == 'act' and action.action == 'read_check')
                     or (require not in ('', 'act') and action.action != require)

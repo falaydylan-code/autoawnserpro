@@ -358,6 +358,7 @@ class Observation(BaseModel):
     last_action: dict = Field(default_factory=dict)
     task_note: str = Field(default='', max_length=2000)
     phase: str = Field(default='', max_length=20)
+    plan: str = Field(default='', max_length=2000)
     advance: bool = False
     model: str = Field(default='', max_length=200)
 
@@ -397,6 +398,8 @@ async def agent_step(body: Observation, request: Request, who=Depends(owner)):
         'input_tokens': record.get('input_tokens'),
         'output_tokens': record.get('output_tokens'),
         'raw': (record.get('raw_reply') or '')[:4000],
+        'working': action.working[:4000],
+        'plan': action.plan[:2000],
         'sent': {
             'elements': len(body.elements),
             'text_chars': len(body.text or ''),

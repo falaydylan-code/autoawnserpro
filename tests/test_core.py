@@ -426,3 +426,63 @@ def test_fill_in_the_blank_guidance_is_explicit():
     assert 'FILL IN THE BLANK' in agent.SYSTEM_PROMPT
     assert 'one text field per blank' in flat
     assert 'one word in each field, not one word across all of them' in flat
+
+
+def test_the_model_is_given_room_to_reason():
+    """A one-sentence cap suppressed exactly the working that gets these right."""
+    import agent
+    flat = ' '.join(agent.SYSTEM_PROMPT.split())
+    assert 'THINK BEFORE YOU ACT' in agent.SYSTEM_PROMPT
+    assert 'at whatever length it takes' in flat
+    assert '"reason":"one sentence"' not in agent.SYSTEM_PROMPT
+    assert agent.Action.model_fields['working'].default == ''
+
+
+def test_the_whole_question_is_solved_once_then_executed():
+    import agent
+    flat = ' '.join(agent.SYSTEM_PROMPT.split())
+    assert 'SOLVE THE WHOLE QUESTION AT ONCE' in agent.SYSTEM_PROMPT
+    assert 'decide all three now, not one at a time' in flat
+    assert 'Do not solve the question again' in flat
+
+
+def test_a_carried_plan_is_put_back_in_front_of_the_model():
+    import agent
+    text = agent.build_observation_text({
+        'elements': [], 'text': '',
+        'plan': 'blank 1 = Cash; blank 2 = Receivable; blank 3 = Unearned'})
+    assert 'THE PLAN YOU MADE FOR THIS QUESTION' in text
+    assert 'blank 2 = Receivable' in text
+    assert 'Do not solve the question again' in text
+
+    without = agent.build_observation_text({'elements': [], 'text': ''})
+    assert 'THE PLAN YOU MADE' not in without
+
+
+def test_a_blank_reports_the_words_on_either_side_of_it():
+    """Which blank is which is decided by the printed words around it."""
+    import agent
+    text = agent.build_observation_text({'elements': [
+        {'ref': 2, 'role': 'textbox', 'name': 'blank',
+         'context': 'follows "the possible three debits are" and is followed by ", Accounts"'},
+    ], 'text': ''})
+    assert 'follows "the possible three debits are"' in text
+    assert 'is followed by ", Accounts"' in text
+
+
+def test_a_reply_cut_off_by_the_token_limit_says_so():
+    """Encouraging working-out makes replies longer; a cut-off one must not
+    look like a malformed model."""
+    import agent
+    with pytest.raises(ValueError, match='cut off'):
+        agent.parse_action('{"action":"fill","working":"I am still think', finish_reason='length')
+    with pytest.raises(ValueError, match='invalid action format'):
+        agent.parse_action('nothing useful here', finish_reason='stop')
+    assert agent.MAX_OUTPUT_TOKENS >= 6000
+
+
+def test_a_field_already_holding_the_answer_is_treated_as_done():
+    import agent
+    flat = ' '.join(agent.SYSTEM_PROMPT.split())
+    assert 'A field listed with a value already contains that text' in flat
+    assert 'Re-entering an answer that is already there' in flat
