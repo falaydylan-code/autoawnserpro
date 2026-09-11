@@ -50,7 +50,11 @@ Deliberately copied from Claude in Chrome.
   (`HANDS_IN` in `content.js`), not merely discouraged in the prompt.
 - **Private and internal addresses are blocked** (`safe_url` in `app.py`), so
   the public endpoint cannot be aimed at the host's own network.
-- **The run stops if the tab changes origin.**
+- **The run stops if the tab changes origin**, and controls from frames of any
+  other origin are never added to the action map, so an embedded third-party
+  frame cannot be clicked.
+- **The model's own decision wins**, not the first JSON-looking thing in its
+  reply, so a page cannot smuggle an action through by being quoted.
 
 Repeated lesson, worth keeping in mind while reviewing: prompt instructions are
 suggestions, harness rules are rules. Anything that must not happen is enforced
@@ -64,6 +68,9 @@ in code, and the prompt only explains why.
   client IP, which conflates users behind one NAT.
 - The agentic path writes no server-side history, so runs cannot be audited
   after the fact.
+- `safe_url` cannot pin the browser to the address it validated. It remembers
+  the first answer per host and refuses a later change, which narrows the
+  rebinding window without closing it.
 - `frontend/` and `adapters.py` are the older selector-driven path, kept as a
   fallback. They are not on the extension's code path.
 

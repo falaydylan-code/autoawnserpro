@@ -53,6 +53,8 @@ function snapshot() {
 
 let refMap = new Map();     // global ref -> { frameId, ref } in that frame
 let frameIds = [0];
+let runOrigin = '';         // only frames from this origin are ever acted on
+let actionFrameId = 0;      // frame to send frame-wide actions such as scroll
 
 async function injectAll(tabId) {
   const injected = await chrome.scripting.executeScript({
@@ -75,12 +77,23 @@ async function observeAllFrames(tabId) {
       continue;                       // frame gone or not injectable; skip it
     }
     if (!page) continue;
+
+    // A page may embed a third-party frame. Its controls are not ours to touch,
+    // so they never enter the action map the model chooses from.
+    if (runOrigin && page.origin && page.origin !== runOrigin) continue;
+
     if (!merged.host) merged.host = page.host;
     if (page.text) merged.text += (merged.text ? '\n\n' : '') + page.text;
     merged.digest += page.digest;
+    const offset = page.frameOffset || { x: 0, y: 0 };
+    if (merged.elements.length === 0) actionFrameId = frameId;
     for (const el of page.elements) {
       refMap.set(next, { frameId, ref: el.ref });
-      merged.elements.push({ ...el, ref: next });
+      // Shift into whole-tab coordinates so the list agrees with the screenshot.
+      const box = el.box
+        ? { ...el.box, x: el.box.x + offset.x, y: el.box.y + offset.y }
+        : el.box;
+      merged.elements.push({ ...el, ref: next, box });
       next += 1;
       if (next > 300) break;
     }
@@ -89,6 +102,16 @@ async function observeAllFrames(tabId) {
 }
 
 async function actOnRef(tabId, action) {
+  // Scroll moves a whole frame and names no element, so there is nothing to
+  // look up. Sending it through the ref map made scrolling impossible.
+  if (action.action === 'scroll') {
+    try {
+      return await chrome.tabs.sendMessage(tabId, { type: 'act', action }, { frameId: actionFrameId });
+    } catch (error) {
+      return { ok: false, detail: 'Could not scroll that frame.' };
+    }
+  }
+
   const target = refMap.get(Number(action.ref));
   if (!target) return { ok: false, detail: 'That element is no longer listed. Re-observing.' };
   try {
@@ -169,6 +192,7 @@ async function run(tabId) {
   const config = await settings();
   const tab = await chrome.tabs.get(tabId);
   const origin = new URL(tab.url).origin;
+  runOrigin = origin;
 
   state.running = true;
   state.stopRequested = false;
@@ -318,6 +342,13 @@ async function run(tabId) {
       stepInQuestion += 1;
       if (stepInQuestion > STEP_BUDGET) {
         emit({ kind: 'stop', message: 'Used the step budget on one question without finishing. Stopping.' });
+        break;
+      }
+
+      // The model call takes seconds. If Stop was pressed during it, the run
+      // ends here rather than acting on a decision the user already cancelled.
+      if (state.stopRequested) {
+        emit({ kind: 'stop', message: 'Stopped by you before the next action was taken.' });
         break;
       }
 

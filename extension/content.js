@@ -96,10 +96,14 @@
 
   // Controls that end the student's work. Refused in the page itself, so no
   // prompt wording and no model mistake can reach them.
-  const HANDS_IN = /\b(?:submit\s+(?:the\s+)?(?:assignment|quiz|test|exam|work)|exit\s+assignment|finish\s+(?:assignment|attempt|quiz|test|exam)|hand\s+in|turn\s+in)\b/i;
+  const HANDS_IN = /\b(?:submit\s+(?:the\s+)?(?:assignment|quiz|test|exam|work|attempt)|exit\s+assignment|finish\s+(?:assignment|attempt|quiz|test|exam)|hand\s+in|turn\s+in)\b/i;
+  const TERMINAL_EXACT = /^(?:submit|submit\s+all(?:\s+answers)?|finish|finish\s+and\s+submit|submit\s+and\s+finish|hand\s+in|turn\s+in|end\s+(?:quiz|test|exam|assignment))$/i;
 
   function endsTheAssignment(el) {
-    return HANDS_IN.test(accessibleName(el) || '');
+    const name = (accessibleName(el) || '').trim();
+    // A button labelled only "Submit" ends the work; "Submit Answer" moves to
+    // the next question. The distinction is the whole point of the two tests.
+    return TERMINAL_EXACT.test(name) || HANDS_IN.test(name);
   }
 
   function sensitive(el) {
@@ -107,6 +111,26 @@
     const haystack = [el.name, el.id, el.getAttribute('autocomplete'), el.placeholder,
                       el.getAttribute('aria-label')].filter(Boolean).join(' ');
     return SENSITIVE_HINT.test(haystack);
+  }
+
+  /* A control's rect is relative to its own frame, but the screenshot covers the
+     whole tab. Walk up the frame chain and add each offset so the two agree.
+     Only reachable for same-origin frames, which are the only ones acted on. */
+  function frameOffset() {
+    let x = 0, y = 0, win = window;
+    for (let depth = 0; depth < 10 && win !== win.parent; depth += 1) {
+      let rect;
+      try {
+        rect = win.frameElement && win.frameElement.getBoundingClientRect();
+      } catch (error) {
+        break;                       // cross-origin parent; stop walking
+      }
+      if (!rect) break;
+      x += rect.left;
+      y += rect.top;
+      win = win.parent;
+    }
+    return { x: Math.round(x), y: Math.round(y) };
   }
 
   function observe() {
@@ -132,12 +156,14 @@
       if (ref > 300) break;
     }
     return {
+      origin: location.origin,
+      frameOffset: frameOffset(),
       elements,
       text: (document.body?.innerText || '').replace(/\n{3,}/g, '\n\n').slice(0, 20000),
       host: location.host,
       title: document.title.slice(0, 200),
       // Used to tell whether an action actually changed anything.
-      digest: (document.body?.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 4000)
+      digest: (document.body?.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 4000) + '|' + [...document.querySelectorAll('input, textarea, select')].map((f) => (f.type === 'checkbox' || f.type === 'radio') ? (f.checked ? '1' : '0') : String(f.value || '')).join(',').slice(0, 2000)
     };
   }
 
@@ -286,15 +312,20 @@
     await pressEffect();
 
     if (action.action === 'fill') {
-      const setter = Object.getOwnPropertyDescriptor(
-        el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype, 'value');
+      const isInput = el instanceof HTMLInputElement;
+      const isTextarea = el instanceof HTMLTextAreaElement;
+      if (!isInput && !isTextarea && !el.isContentEditable) {
+        return { ok: false, detail: 'That control is not a text field, so nothing was typed.' };
+      }
       el.focus();
-      if (el.isContentEditable) {
+      if (el.isContentEditable && !isInput && !isTextarea) {
         el.textContent = action.text;
-      } else if (setter && setter.set) {
-        setter.set.call(el, action.text);           // React-friendly value set
       } else {
-        el.value = action.text;
+        // React-friendly value set, but only on a real input or textarea.
+        const setter = Object.getOwnPropertyDescriptor(
+          isTextarea ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype, 'value');
+        if (setter && setter.set) setter.set.call(el, action.text);
+        else el.value = action.text;
       }
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
@@ -336,7 +367,7 @@
       return true;
     }
     if (message.type === 'digest') {
-      reply({ digest: (document.body?.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 4000) });
+      reply({ digest: (document.body?.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 4000) + '|' + [...document.querySelectorAll('input, textarea, select')].map((f) => (f.type === 'checkbox' || f.type === 'radio') ? (f.checked ? '1' : '0') : String(f.value || '')).join(',').slice(0, 2000) });
       return true;
     }
     if (message.type === 'cursor_off') {
@@ -350,7 +381,9 @@
         setTimeout(() => reply({ ok: true, detail: 'Scrolled.' }), 350);
         return true;
       }
-      act(message.action).then(reply);
+      act(message.action)
+        .then(reply)
+        .catch((error) => reply({ ok: false, detail: 'That control could not be used: ' + error.message }));
       return true;
     }
     return false;
