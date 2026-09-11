@@ -240,6 +240,7 @@ async function run(tabId) {
   let answered = false;  // one answering action has landed for the question on screen
   let navSteps = 0;      // consecutive steps spent looking for the next question
   let idleChecks = 0;    // read checks returned when an action was due
+  let plan = '';         // the answer worked out when the question was read
 
   try {
     await injectAll(tabId);
@@ -281,6 +282,7 @@ async function run(tabId) {
         page_changed: changed,
         last_action: lastAction || {},
         task_note: checked ? config.note : '',
+        plan,
         phase: navSteps > 0 ? 'navigate'
           : (!checked || recheck) ? 'read_check'
           : (idleChecks > 0 ? 'must_act' : 'act'),
@@ -303,6 +305,7 @@ async function run(tabId) {
         sent: `${sent.elements} elements, ${sent.text_chars} chars of text, `
             + `screenshot ${sent.screenshot ? 'yes' : 'MISSING'}, `
             + `continuing ${sent.advance ? 'on' : 'off'}, model ${sent.model || '?'}`,
+        working: result.working || '',
         raw: result.raw || '',
         cost: result.cost,
         tokens: `${result.input_tokens || 0} in / ${result.output_tokens || 0} out`
@@ -321,6 +324,8 @@ async function run(tabId) {
         }
         checked = true;
         state.questions += 1;
+        plan = action.plan || '';
+        if (plan) emit({ kind: 'plan', message: 'Plan: ' + plan });
         stepInQuestion = 0;
         emit({ kind: 'question', message: action.question, detail: `${action.kind || 'unknown'} · confidence ${action.confidence || 0}` });
         lastAction = { action: 'read_check' };
@@ -347,6 +352,7 @@ async function run(tabId) {
             emit({ kind: 'stop', message: `No question on screen. ${action.reason || ''}`.trim() });
             break;
           }
+          plan = '';               // a new screen means the old plan is spent
           navSteps += 1;
           if (navSteps > NAV_BUDGET) {
             emit({ kind: 'stop', message:
@@ -361,6 +367,8 @@ async function run(tabId) {
         }
         state.questions += 1;
         emit({ kind: 'question', message: action.question });
+        plan = action.plan || '';
+        if (plan) emit({ kind: 'plan', message: 'Plan: ' + plan });
         stepInQuestion = 0;
         recheck = false;
         navSteps = 0;

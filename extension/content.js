@@ -56,6 +56,49 @@
     return (column ? column + ' for: ' : '') + label.slice(0, 180);
   }
 
+
+  /* A blank in a sentence means nothing on its own. What decides the answer is
+     the words printed either side of it: "the possible three debits are ___,
+     Accounts ___, and/or ___ Revenue" tells you the second blank must complete
+     "Accounts" and the third must precede "Revenue". Without that the model is
+     guessing which blank is which. */
+  function fieldContext(el) {
+    const tag = el.tagName.toLowerCase();
+    if (tag !== 'input' && tag !== 'textarea' && !el.isContentEditable) return '';
+    if (el.type && !['text', 'number', 'search', 'tel', 'url', 'email'].includes(el.type)) return '';
+
+    // Smallest ancestor that actually carries the sentence.
+    let container = el.parentElement;
+    for (let depth = 0; depth < 6 && container; depth += 1) {
+      const length = (container.innerText || '').trim().length;
+      if (length > 25 && length < 700) break;
+      if (length >= 700) return '';
+      container = container.parentElement;
+    }
+    if (!container) return '';
+
+    let before = '', after = '', passed = false;
+    const walk = (node) => {
+      if (node === el) { passed = true; return; }
+      if (node.nodeType === Node.TEXT_NODE) {
+        const text = node.textContent.replace(/\s+/g, ' ');
+        if (passed) after += text; else before += text;
+        return;
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) return;
+      if (node.contains(el) || !passed || true) {
+        for (const child of node.childNodes) walk(child);
+      }
+    };
+    for (const child of container.childNodes) walk(child);
+    if (!passed) return '';
+
+    before = before.trim().slice(-70);
+    after = after.trim().slice(0, 70);
+    if (!before && !after) return '';
+    return `follows "${before}" and is followed by "${after}"`;
+  }
+
   function accessibleName(el) {
     const aria = el.getAttribute('aria-label');
     if (aria) return aria.trim();
@@ -150,6 +193,7 @@
         ref,
         role: role(el),
         name: accessibleName(el).slice(0, 200),
+        context: fieldContext(el),
         value: (el.value !== undefined && el.type !== 'password' ? String(el.value) : '').slice(0, 200),
         checked: el.checked === true,
         disabled: el.disabled === true || el.getAttribute('aria-disabled') === 'true',

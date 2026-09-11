@@ -109,3 +109,5 @@ button.quiet { padding:4px 10px; font-size:12px; }
 .log .meta { display:block; color:var(--ink-3); font-size:11px; margin-top:2px;
   font-family: ui-monospace,Consolas,monospace; }
 .log li.hidden { display:none; }
+
+.log .plan { color: var(--ok); font-weight: 600; }

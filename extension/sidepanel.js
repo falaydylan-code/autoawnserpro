@@ -60,6 +60,16 @@ function addRow(row) {
     li.append(meta);
   }
 
+  if (row.working) {
+    const box = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.textContent = 'thinking';
+    const pre = document.createElement('pre');
+    pre.textContent = row.working;
+    box.append(summary, pre);
+    li.append(box);
+  }
+
   if (row.raw) {
     const box = document.createElement('details');
     const summary = document.createElement('summary');
@@ -87,6 +97,7 @@ $('copylog').onclick = async () => {
     if (e.detail) bits.push('  reason: ' + e.detail);
     if (e.sent) bits.push('  sent: ' + e.sent);
     if (e.tokens) bits.push('  tokens: ' + e.tokens + (e.cost != null ? '  cost: $' + Number(e.cost).toFixed(5) : ''));
+    if (e.working) bits.push('  thinking: ' + e.working);
     if (e.raw) bits.push('  raw: ' + e.raw);
     return bits.join('\n');
   });
