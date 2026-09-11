@@ -410,3 +410,19 @@ def test_an_unmeasurable_position_is_stated_not_guessed():
     ], 'text': ''})
     assert 'ref 1 | radio | name: Option A | at x10 y20' in text
     assert 'ref 2 | radio | name: Option B | position unknown' in text
+
+
+def test_must_act_phase_refuses_another_read_check():
+    """Re-reading a question it has already read is how runs froze."""
+    import agent
+    text = agent.build_observation_text({'elements': [], 'text': '', 'phase': 'must_act'})
+    assert 'YOU HAVE ALREADY READ THIS QUESTION' in text
+    assert 'Do not return read_check again' in text
+
+
+def test_fill_in_the_blank_guidance_is_explicit():
+    import agent
+    flat = ' '.join(agent.SYSTEM_PROMPT.split())
+    assert 'FILL IN THE BLANK' in agent.SYSTEM_PROMPT
+    assert 'one text field per blank' in flat
+    assert 'one word in each field, not one word across all of them' in flat

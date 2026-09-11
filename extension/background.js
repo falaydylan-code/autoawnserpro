@@ -182,18 +182,37 @@ async function decide(config, observation) {
     res = await call(token);
   }
   if (!res.ok) {
-    let detail = 'The backend refused this step.';
-    try { detail = (await res.json()).error || detail; } catch { /* keep default */ }
-    throw new Error(detail);
+    let detail = '';
+    try {
+      const body = await res.json();
+      detail = body.error || body.detail || '';
+    } catch {
+      try { detail = (await res.text()).slice(0, 300); } catch { detail = ''; }
+    }
+    throw new Error(`The backend refused this step (HTTP ${res.status})`
+      + (detail ? `: ${detail}` : '. It returned no reason.'));
   }
   return res.json();
 }
 
+let screenshotWarned = false;
+
 async function screenshot(windowId) {
   try {
-    return await chrome.tabs.captureVisibleTab(windowId, { format: 'png' });
-  } catch {
-    return '';   // the model can still work from the element index alone
+    const shot = await chrome.tabs.captureVisibleTab(windowId, { format: 'png' });
+    if (shot) return shot;
+    throw new Error('Chrome returned an empty image.');
+  } catch (error) {
+    // Running without the picture is close to useless, and silently carrying on
+    // is how it went unnoticed for a whole day. Say it once, loudly.
+    if (!screenshotWarned) {
+      screenshotWarned = true;
+      emit({ kind: 'error', message: 'No screenshot could be taken — the agent is working from page text alone.',
+             detail: (error && error.message ? error.message + ' ' : '')
+                   + 'Reload the extension at chrome://extensions. If it persists, its permissions '
+                   + 'no longer allow capturing the tab.' });
+    }
+    return '';
   }
 }
 
@@ -220,6 +239,7 @@ async function run(tabId) {
   let recheck = false;   // a new question means looking again before acting
   let answered = false;  // one answering action has landed for the question on screen
   let navSteps = 0;      // consecutive steps spent looking for the next question
+  let idleChecks = 0;    // read checks returned when an action was due
 
   try {
     await injectAll(tabId);
@@ -234,7 +254,10 @@ async function run(tabId) {
 
       const page = await observeAllFrames(tabId);
       const changed = page.digest !== lastDigest;
-      if (!changed && lastAction) {
+      // A read check changes nothing by design. Counting it as an unresponsive
+      // page is what froze runs on questions the model kept re-reading.
+      const lastWasAction = lastAction && lastAction.action !== 'read_check';
+      if (!changed && lastWasAction) {
         repeats += 1;
         if (repeats >= REPEAT_LIMIT) {
           emit({ kind: 'stop', message: 'The page stopped responding to actions. Stopping instead of repeating.' });
@@ -258,7 +281,9 @@ async function run(tabId) {
         page_changed: changed,
         last_action: lastAction || {},
         task_note: checked ? config.note : '',
-        phase: navSteps > 0 ? 'navigate' : ((!checked || recheck) ? 'read_check' : 'act'),
+        phase: navSteps > 0 ? 'navigate'
+          : (!checked || recheck) ? 'read_check'
+          : (idleChecks > 0 ? 'must_act' : 'act'),
         advance: config.advance,
         model: config.model
       };
@@ -302,6 +327,18 @@ async function run(tabId) {
         continue;
       }
 
+      if (action.action === 'read_check' && checked && navSteps === 0 && !recheck) {
+        // The question is already known; re-reading it achieves nothing.
+        idleChecks += 1;
+        if (idleChecks > 2) {
+          emit({ kind: 'stop', message: 'The model kept re-reading the question instead of answering it.' });
+          break;
+        }
+        emit({ kind: 'info', message: 'Question already read; asking for an action.' });
+        lastAction = { action: 'read_check' };
+        continue;
+      }
+
       if (action.action === 'read_check') {
         if (!action.has_question) {
           // Reading material, a summary or a loading screen between questions.
@@ -327,6 +364,7 @@ async function run(tabId) {
         stepInQuestion = 0;
         recheck = false;
         navSteps = 0;
+        idleChecks = 0;
         answered = false;            // a new question starts unanswered
         lastAction = { action: 'read_check' };
         continue;

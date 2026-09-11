@@ -382,8 +382,13 @@ async def agent_step(body: Observation, request: Request, who=Depends(owner)):
 
     record = {}
     try:
+        require = ''
+        if body.phase == 'read_check':
+            require = 'read_check'
+        elif body.phase == 'must_act':
+            require = 'act'
         action = await agent.decide(budget_key(who, request), body.model_dump(), selected, record,
-                                    require='read_check' if body.phase == 'read_check' else '')
+                                    require=require)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from None
     return {

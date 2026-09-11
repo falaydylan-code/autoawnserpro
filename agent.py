@@ -56,6 +56,12 @@ symbols, thousands separators and units unless the box already shows one or the
 question asks for them. If a transaction earns nothing, enter 0 rather than
 leaving the box empty.
 
+FILL IN THE BLANK
+A sentence with two or more blanks has one text field per blank, listed in the
+order they appear. Fill them one per turn, left to right. Enter just the word
+asked for, with no punctuation and no explanation. "Enter one word per blank"
+means one word in each field, not one word across all of them.
+
 WORKSHEETS WITH SEVERAL ANSWERS
 Some questions are a table with a separate box for each row. Fill them one at a
 time, one action per turn, working down the rows in order. Entries named
@@ -280,6 +286,11 @@ def build_observation_text(observation):
             'Next, Proceed, Got it, or the close button on a reading panel -- and '
             'click it. Scroll if the control is out of view. Return done only if '
             'the screen genuinely says the assignment is finished.')
+    if observation.get('phase') == 'must_act':
+        context.append(
+            'YOU HAVE ALREADY READ THIS QUESTION. Do not return read_check again. '
+            'Choose an action now: fill a field, click an option, scroll if the '
+            'controls are out of view, or give_up with a reason.')
     if observation.get('phase') == 'read_check':
         context.append(
             'THIS STEP MUST BE read_check. Do not fill, click, select or scroll. '
@@ -350,15 +361,24 @@ async def decide(owner, observation, model, record=None, require=''):
                 record.update(cost=cost, input_tokens=usage.get('prompt_tokens'),
                               output_tokens=usage.get('completion_tokens'), raw_reply=raw)
                 action = parse_action(raw)
-                if require and action.action != require:
+                wrong_verb = (
+                    (require == 'act' and action.action == 'read_check')
+                    or (require not in ('', 'act') and action.action != require)
+                )
+                if wrong_verb:
                     if attempt < 2:
                         body['messages'].append({'role': 'assistant', 'content': raw})
+                        wanted = ('an action that changes the page (fill, click, select, '
+                                  'scroll, done or give_up)' if require == 'act'
+                                  else f'a "{require}" action')
                         body['messages'].append({'role': 'user', 'content':
-                            f'That was not the required action. Reply again with a '
-                            f'"{require}" action and nothing else.'})
+                            f'That was not what was asked for. Reply again with {wanted} '
+                            'and nothing else.'})
                         continue
                     raise ValueError(
-                        f'The model would not perform the required {require} step. Nothing was done.')
+                        'The model would not choose an action for this question. Nothing was done.'
+                        if require == 'act'
+                        else f'The model would not perform the required {require} step. Nothing was done.')
                 if cost is None:
                     raise ValueError('OpenRouter did not report cost. Automation paused; reconcile usage first.')
                 return action
