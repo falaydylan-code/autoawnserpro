@@ -1,0 +1,147 @@
+"""Load the actual MV3 extension and exercise its worker/page boundary."""
+import functools
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
+from pathlib import Path
+import threading
+import pytest
+from playwright.sync_api import sync_playwright
+
+ROOT=Path(__file__).resolve().parents[1]
+
+@pytest.fixture
+def extension(tmp_path):
+    class Quiet(SimpleHTTPRequestHandler):
+        def log_message(self,*args): pass
+    handler=functools.partial(Quiet,directory=str(ROOT/'tests'/'fixtures'))
+    server=ThreadingHTTPServer(('127.0.0.1',0),handler)
+    thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+    origin=f'http://127.0.0.1:{server.server_port}'
+    with sync_playwright() as p:
+        context=p.chromium.launch_persistent_context(str(tmp_path/'profile'),channel='chromium',headless=True,
+            args=[f'--disable-extensions-except={ROOT / "extension"}',f'--load-extension={ROOT / "extension"}'],
+            viewport={'width':1500,'height':1100},reduced_motion='reduce')
+        worker=context.service_workers[0] if context.service_workers else context.wait_for_event('serviceworker')
+        page=context.pages[0];page.goto(origin+'/multipart_tabs.html')
+        tab_id=worker.evaluate('(url)=>chrome.tabs.query({}).then(t=>t.find(x=>x.url===url).id)',page.url)
+        worker.evaluate('(origin)=>__assignmentHarness.reset(origin)',origin)
+        worker.evaluate('(id)=>__assignmentHarness.injectAll(id)',tab_id)
+        yield page,worker,tab_id,context,origin
+        context.close()
+    server.shutdown();server.server_close();thread.join(timeout=2)
+
+def plan(worker,tab_id,include_b_ref=False):
+    return worker.evaluate('''async ({id,b})=>{
+      const h=__assignmentHarness,p=await h.observeAllFrames(id);
+      const find=s=>p.elements.find(e=>e.key.endsWith('#'+s))?.ref;
+      h.coverage.read({question:'Calculate both amounts',plan:'a=4; b=6',parts:[
+        {id:'a',what:'Part A',answer:'4',ref:find('a')},
+        {id:'b',what:'Part B',answer:'6',ref:b?find('b'):null}]},p);
+      return h.coverage.summary();
+    }''',{'id':tab_id,'b':include_b_ref})
+
+def execute(worker,tab_id,target,action='click',**fields):
+    return worker.evaluate('''async ({id,target,action,fields})=>{
+      const h=__assignmentHarness,p=await h.observeAllFrames(id);
+      const ref=p.elements.find(e=>e.key.endsWith('#'+target)).ref;
+      return h.executeAction(id,{action,ref,...fields},p,{auto_submit:true,advance:false});
+    }''',{'id':tab_id,'target':target,'action':action,'fields':fields})
+
+def test_real_worker_refuses_early_submission_then_allows_verified_parts(extension):
+    page,worker,tab_id,_,_=extension
+    plan(worker,tab_id)
+    assert execute(worker,tab_id,'a','fill',text='4',part_id='a')['ok']
+    refused=execute(worker,tab_id,'submit')
+    assert refused['blocked'] and 'Part B' in refused['detail']
+    assert page.evaluate('submissions')==0
+    # Continuing off must not prevent an intra-question Part transition.
+    assert execute(worker,tab_id,'nextPart')['ok']
+    plan(worker,tab_id,True)
+    assert worker.evaluate('__assignmentHarness.coverage.questions.size')==1
+    assert execute(worker,tab_id,'b','fill',text='6',part_id='b')['ok']
+    assert execute(worker,tab_id,'submit')['ok']
+    assert page.evaluate('submissions')==1
+    assert page.locator('#feedback').inner_text()=='Your Answer: correct'
+
+def test_current_observation_revokes_stale_verification(extension):
+    page,worker,tab_id,_,_=extension
+    plan(worker,tab_id)
+    assert execute(worker,tab_id,'a','fill',text='4',part_id='a')['ok']
+    execute(worker,tab_id,'submit')  # refreshes evidence, but refuses B
+    page.locator('#a').fill('wrong')
+    refused=execute(worker,tab_id,'submit')
+    assert 'Part A' in refused['detail']
+    assert page.evaluate('submissions')==0
+
+def test_real_worker_detects_answer_oscillation(extension):
+    page,worker,tab_id,_,_=extension;plan(worker,tab_id)
+    for value in ['4','6','4']:
+        assert execute(worker,tab_id,'a','fill',text=value,part_id='a')['ok']
+    result=execute(worker,tab_id,'a','fill',text='6',part_id='a')
+    assert result['blocked'] and '"4" and "6"' in result['detail']
+    assert page.locator('#a').input_value()=='4'
+
+def test_stability_wait_observes_two_equal_reads(extension):
+    page,worker,tab_id,_,_=extension
+    worker.evaluate('async id=>{globalThis.prior=(await __assignmentHarness.observeAllFrames(id)).digest}',tab_id)
+    page.evaluate("setTimeout(()=>a.value='loading',100);setTimeout(()=>a.value='ready',300)")
+    elapsed=worker.evaluate('''async id=>{const start=Date.now();const ok=await __assignmentHarness.waitForEffect(id,prior);return {ok,ms:Date.now()-start}}''',tab_id)
+    assert elapsed['ok'] and elapsed['ms']>=500
+    assert page.locator('#a').input_value()=='ready'
+
+def test_badges_are_global_across_frames_and_removed_after_capture(extension):
+    page,worker,tab_id,_,origin=extension
+    page.evaluate('(url)=>{const f=document.createElement("iframe");f.src=url;f.style="width:900px;height:400px";document.body.append(f)}',origin+'/blanks_prose.html')
+    page.frame_locator('iframe').locator('#one').wait_for()
+    worker.evaluate('(id)=>__assignmentHarness.injectAll(id)',tab_id)
+    result=worker.evaluate('''async id=>{const h=__assignmentHarness,p=await h.observeAllFrames(id);const image=await h.capture(id,p,true);return {refs:p.elements.map(e=>e.ref),image:image.slice(0,22)}}''',tab_id)
+    assert len(set(result['refs']))==len(result['refs'])
+    assert result['image'].startswith('data:image/png;base64,')
+    assert page.locator('#__assignment_lab_badges').count()==0
+    assert page.frame_locator('iframe').locator('#__assignment_lab_badges').count()==0
+
+def test_stop_blocks_actions_even_with_a_completed_model_response(extension):
+    page,worker,tab_id,_,_=extension;plan(worker,tab_id)
+    worker.evaluate('__assignmentHarness.state.stopRequested=true')
+    assert not execute(worker,tab_id,'a','fill',text='4',part_id='a')['ok']
+    assert page.locator('#a').input_value()==''
+
+
+def test_hidden_part_is_an_unanswered_placeholder_not_a_tab_target(extension):
+    page,worker,tab_id,_,_=extension
+    worker.evaluate('''async id=>{const h=__assignmentHarness,p=await h.observeAllFrames(id);h.coverage.read({question:'Calculate both amounts',parts:[
+      {id:'a',what:'A',answer:'4',ref:p.elements.find(e=>e.key.endsWith('#a')).ref},
+      {id:'b',what:'B unread',answer:'',ref:p.elements.find(e=>e.key.endsWith('#tabB')).ref}]},p)}''',tab_id)
+    assert worker.evaluate('__assignmentHarness.coverage.ledger()[1].target_key')==''
+    assert execute(worker,tab_id,'a','fill',text='4',part_id='a')['ok']
+    assert execute(worker,tab_id,'tabB')['ok']
+    plan(worker,tab_id,True)
+    assert worker.evaluate('__assignmentHarness.coverage.ledger()[1].answer')=='6'
+    assert not worker.evaluate('__assignmentHarness.coverage.ledger()[1].verified')
+
+
+def test_hand_in_switch_is_independent_of_answer_completion(extension):
+    page,worker,tab_id,_,_=extension
+    plan(worker,tab_id)
+    execute(worker,tab_id,'a','fill',text='4',part_id='a')
+    execute(worker,tab_id,'tabB');plan(worker,tab_id,True)
+    execute(worker,tab_id,'b','fill',text='6',part_id='b')
+    result=worker.evaluate('''async id=>{const h=__assignmentHarness,p=await h.observeAllFrames(id);return h.executeAction(id,{action:'click',ref:p.elements.find(e=>e.key.endsWith('#submit')).ref},p,{advance:true,auto_submit:false})}''',tab_id)
+    assert result['blocked'] and 'switched off' in result['detail']
+    assert page.evaluate('submissions')==0
+
+
+def test_matching_ledger_verifies_the_planned_pair_not_answer_wording(extension):
+    page,worker,tab_id,_,origin=extension
+    page.goto(origin+'/matching_pointer.html')
+    worker.evaluate('(id)=>__assignmentHarness.injectAll(id)',tab_id)
+    worker.evaluate('''async id=>{const h=__assignmentHarness,p=await h.observeAllFrames(id),ref=s=>p.elements.find(e=>e.key.endsWith('#'+s)).ref;
+      h.coverage.read({question:'Match descriptions',parts:[{id:'a',what:'Same-period collections match',answer:'Cash',ref:ref('cashTarget'),source_ref:ref('cash')}]},p);
+    }''',tab_id)
+    wrong=worker.evaluate('''async id=>{const h=__assignmentHarness,p=await h.observeAllFrames(id),ref=s=>p.elements.find(e=>e.key.endsWith('#'+s)).ref;
+      return h.executeAction(id,{action:'drag',ref:ref('receivable'),to:ref('cashTarget'),part_id:'a'},p,{auto_submit:true,advance:false})}''',tab_id)
+    assert not wrong['ok']
+    result=worker.evaluate('''async id=>{const h=__assignmentHarness,p=await h.observeAllFrames(id),ref=s=>p.elements.find(e=>e.key.endsWith('#'+s)).ref;
+      const result=await h.executeAction(id,{action:'drag',ref:ref('cash'),to:ref('cashTarget'),part_id:'a'},p,{auto_submit:true,advance:false});
+      await h.refreshEvidence(id,await h.observeAllFrames(id));return {result,parts:h.coverage.ledger()}}''',tab_id)
+    assert result['result']['ok']
+    assert result['parts'][0]['verified'] and result['parts'][0]['answer']=='Cash'

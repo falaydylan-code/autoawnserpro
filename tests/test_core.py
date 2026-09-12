@@ -486,3 +486,36 @@ def test_a_field_already_holding_the_answer_is_treated_as_done():
     flat = ' '.join(agent.SYSTEM_PROMPT.split())
     assert 'A field listed with a value already contains that text' in flat
     assert 'Re-entering an answer that is already there' in flat
+
+
+@pytest.mark.parametrize('raw', [
+    '{"action":"drag","ref":1}',
+    '{"action":"drag","ref":1,"to":1}',
+    '{"action":"press","ref":1,"key":"Control+L"}',
+    '{"action":"press","ref":1}',
+    '{"action":"click","ref":1,"mode":"javascript"}',
+    '{"action":"read_check","parts":[{"id":"a","what":"A","answer":"1"},{"id":"a","what":"B","answer":"2"}]}',
+])
+def test_coverage_actions_reject_malformed_arguments(raw):
+    import agent
+    with pytest.raises(ValueError): agent.parse_action(raw)
+
+
+def test_coverage_actions_and_progress_rendering():
+    import agent
+    assert agent.parse_action('{"action":"drag","ref":1,"to":2}').to==2
+    assert agent.parse_action('{"action":"press","ref":1,"key":"Space"}').key=='Space'
+    assert agent.parse_action('{"action":"scroll_to","ref":1}').ref==1
+    text=agent.build_observation_text({'elements':[{'ref':2,'group':1,'depth':1,'new':True,'row':'Cash','column':'Amount'}],'progress':'2 of 3 parts done'})
+    assert '  ref 2' in text and 'NEW' in text and 'group ref 1' in text
+    assert 'row: Cash' in text and 'column: Amount' in text
+    assert 'PROGRESS: 2 of 3 parts done' in text
+    for instruction in ['DRAG AND KEYBOARD','STRUCTURED CONTROLS AND PARTS','part_id','hand-in switch']:
+        assert instruction in agent.SYSTEM_PROMPT
+
+
+def test_observation_rejects_oversized_and_malformed_parts():
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError): app.Observation(ledger=[{'id':'a','what':'A','answer':'1'}]*61)
+    with pytest.raises(ValidationError): app.Observation(ledger=[{'id':'a','answer':'1'}])
+    with pytest.raises(ValidationError): app.Observation(elements=[{'ref':1,'depth':100}])

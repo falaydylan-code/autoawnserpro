@@ -1,5 +1,43 @@
 # Handoff log
 
+## 2026-09-11 — Codex — question coverage 0.6.0
+
+**Did:** Executed the user-authorized full plan on `codex/question-coverage` in
+`C:/Users/falay/assignment-agent-question-coverage`, based on 16f6253. Added grouped
+prose/table/open-shadow observations, global badges and NEW markers; click,
+keyboard, HTML5 and pointer drag fallbacks; typed action/observation validation;
+independent target verification; a per-question part ledger; progress, stability
+and oscillation guards; and a default-off hand-in switch with a code gate.
+Matching plans bind `source_ref` as well as destination. Hidden part answers can
+start empty and be filled after opening the part. Added six fixtures, real
+content-script tests and loaded Chromium extension tests. No dependency changes.
+
+**Verified:** `pytest -q`: **123 passed**. All four extension JavaScript files
+pass `node --check`; `git diff --check` passes. Live MiniMax checks completed
+multipart (6 steps), pointer matching (5 steps), and public MathPapa addition
+(4 steps), each with correct website feedback. Successful-step recorded costs
+were $0.006479734, $0.00820828 and $0.00891846 respectively; these are smoke checks,
+not total spend across earlier failed attempts. Earlier runs exposed hidden-part
+answer updates and source-label/account-name verification mismatches, now fixed.
+Artifacts are local and ignored under `data/coverage-checks/`. Optional repeat:
+`python scripts/check_coverage_live.py --env-file <existing-env-path> --fixture matching_pointer.html`.
+This uses real API credit; ordinary pytest does not.
+
+**Left undone:** Canvas/MyLab live questions require a user-selected accessible
+practice page. T8's live-courseware acceptance is therefore still open. Nothing
+is merged, pushed or deployed. Update backend and extension together, then reload
+the extension AND assignment page. The old backend rejects the new action fields.
+
+**Watch out:** The original `assignment-agent` checkout has a pre-existing
+unfinished rebase; it was left untouched. Integrate from this branch rather than
+resetting that checkout. Synthetic events may be rejected by particular sites;
+closed shadow roots and cross-origin frames are not inspectable. Warnings block
+hand-in conservatively. Verification proves entry/drop, not answer correctness.
+Recorded per-step costs do not account for every failed/re-prompted provider call
+in the existing metering/UI path. No proprietary Claude harness was copied.
+
+---
+
 Newest first. Both agents append here before finishing a session. Four lines:
 **Did / Verified / Left undone / Watch out.** See `AGENTS.md` for the protocol.
 

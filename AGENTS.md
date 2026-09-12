@@ -124,8 +124,9 @@ elements), decides one action via a model, acts, then looks again.
 
 `ARCHITECTURE.md` is the map. Read it before changing the loop.
 `CONTEXT_BROWSER_USE.md` compares our design to browser-use and lists what is
-worth taking. `AGENTIC_PLAN.md` is the design Dylan approved; the phrase
-"execute the plan" means work that document.
+worth taking. `AGENTIC_PLAN.md` is historical. The current approved implementation
+is `plans/question-coverage/PLAN.md`; its execution notes record Dylan's direct
+authorization for Codex to own all tasks instead of the provisional split.
 
 - `extension/` — the Manifest V3 extension. `background.js` owns the loop and
   every limit on it; `content.js` runs in the page and is the only thing that
@@ -156,10 +157,19 @@ otherwise, and he has lost an hour to that already.
 Do not undo these without a reason, and add to the list when you find another.
 
 - **Prompt instructions are suggestions; harness rules are rules.** Anything
-  that must not happen is enforced in code. The read-check gate, the refusal to
-  hand in an assignment, and the action vocabulary are all enforced server-side
+  that must not happen is enforced in code. The read-check gate, the gated
+  hand-in policy, and the action vocabulary are all enforced server-side
   or in the page, never by asking the model nicely. Each was tried the polite
   way first and each failed.
+- **Hand-in changed in v0.6.0 by Dylan's explicit instruction.** Do not restore
+  a blanket refusal. The hand-in switch defaults off. A terminal action needs
+  every known part verified, every discovered part tab inspected, and no
+  unplanned visible answer controls. A model claiming completion is insufficient.
+  Verification means the intended value is present, not that it is academically
+  correct. Unknown/closed-root controls may still require manual completion.
+- **Worktree for question coverage:** `C:/Users/falay/assignment-agent-question-coverage`
+  on `codex/question-coverage`. The original checkout has a pre-existing rebase;
+  Codex deliberately did not resolve or overwrite it.
 - **Never swallow an error.** `captureVisibleTab` failed silently for a day and
   the agent answered coursework with no screenshot at all. If something degrades
   the run, say so in the log, loudly, once.

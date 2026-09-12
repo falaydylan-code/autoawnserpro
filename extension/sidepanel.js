@@ -117,6 +117,7 @@ function paintState(state) {
   $('questions').textContent = state.questions || 0;
   $('steps').textContent = state.steps;
   $('cost').textContent = '$' + (state.cost || 0).toFixed(4);
+  $('progress').textContent = state.progress || 'No parts planned yet.';
   paintEth();
 }
 
@@ -230,6 +231,9 @@ $('stop').onclick = async () => {
 $('advance').onchange = async () => {
   await chrome.storage.local.set({ advance: $('advance').checked });
 };
+for (const id of ['auto_submit', 'badges']) {
+  $(id).onchange = () => chrome.storage.local.set({ [id]: $(id).checked });
+}
 
 $('save').onclick = async () => {
   await chrome.storage.local.set({
@@ -249,12 +253,14 @@ chrome.runtime.onMessage.addListener((message) => {
 });
 
 (async function boot() {
-  const stored = await chrome.storage.local.get(['backend', 'model', 'note', 'armed', 'advance']);
+  const stored = await chrome.storage.local.get(['backend', 'model', 'note', 'armed', 'advance', 'auto_submit', 'badges']);
   $('backend').value = stored.backend || DEFAULT_BACKEND;
   $('model').value = stored.model || '';
   $('note').value = stored.note || '';
   armed = stored.armed === true;
   $('advance').checked = stored.advance === true;
+  $('auto_submit').checked = stored.auto_submit === true;
+  $('badges').checked = stored.badges !== false;
   await refreshPage();
   const held = await accessGranted('https://*/*');
   if (armed && !held) {
