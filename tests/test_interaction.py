@@ -131,3 +131,52 @@ def test_wrong_target_change_does_not_count_as_verified_drop(page):
     result=act(page,{'action':'drag','ref':s['ref'],'to':t['ref']})
     assert not result['ok'] and 'without the expected drop' in result['detail']
     assert page.locator('#receivableTarget > #cash').count()==1
+
+
+# --------------------------------------------------------------------------
+# a plain multiple-choice question with styled options, and the controls the
+# agent must never operate whatever the page or the model says
+# --------------------------------------------------------------------------
+
+def test_styled_option_buttons_are_plain_buttons_and_verify_by_page_state(page):
+    """Courseware options are usually <button>s, not radios. A click on one
+    must be verifiable from the state the page exposes, never from the click."""
+    load(page, 'mcq_buttons.html')
+    opt = by_id(page, 'optC')
+    assert opt['role'] == 'button' and opt['control'] == ''
+    key = opt['key']
+    before = page.evaluate('(k)=>__assignmentLab.verify({key:k,answer:"Deferred Revenue",kind:"click"})', key)
+    assert before['visible'] and not before['verified'], 'nothing is selected yet'
+    assert act(page, {'action': 'click', 'ref': opt['ref']})['ok']
+    after = page.evaluate('(k)=>__assignmentLab.verify({key:k,answer:"Deferred Revenue",kind:"click"})', key)
+    assert after['verified'], 'the page marked it pressed, so it verifies'
+    wrong = page.evaluate('(k)=>__assignmentLab.verify({key:k,answer:"Cash",kind:"click"})', key)
+    assert not wrong['verified'], 'the label has to match too'
+
+
+def test_destructive_account_and_consent_controls_are_refused_in_the_page(page):
+    load(page, 'mcq_buttons.html')
+    for id_, word in (('signout', 'Sign out'), ('reset', 'Reset progress')):
+        el = by_id(page, id_)
+        assert el['control'] == 'refused', f'{word} should be classified refused'
+        out = act(page, {'action': 'click', 'ref': el['ref']})
+        assert not out['ok'] and 'Refused' in out['detail']
+        out = act(page, {'action': 'press', 'ref': el['ref'], 'key': 'Enter'})
+        assert not out['ok'], 'Enter must not bypass the refusal'
+    assert page.evaluate('document.body.dataset.signedOut') is None
+    assert page.evaluate('document.body.dataset.reset') is None
+
+
+def test_a_question_option_that_merely_contains_a_dangerous_word_is_not_refused(page):
+    """'Deleted items report' is an answer option, not a Delete button."""
+    load(page, 'mcq_buttons.html')
+    assert by_id(page, 'optD')['control'] == ''
+
+
+def test_links_that_leave_the_site_are_refused_but_same_page_anchors_are_not(page):
+    load(page, 'mcq_buttons.html')
+    away, here = by_id(page, 'away'), by_id(page, 'here')
+    assert away['external'] is True and here['external'] is False
+    out = act(page, {'action': 'click', 'ref': away['ref']})
+    assert not out['ok'] and 'leaves the assignment site' in out['detail']
+    assert page.url.startswith('file:'), 'nothing navigated'

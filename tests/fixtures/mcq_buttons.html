@@ -1,0 +1,32 @@
+<!doctype html><meta charset="utf-8"><title>Plain multiple choice</title>
+<main>
+<fieldset data-question-id="q7"><legend>Which account increases when a customer pays in advance?</legend>
+<div role="group" id="options">
+  <button type="button" class="choice" id="optA" aria-pressed="false">Cash</button>
+  <button type="button" class="choice" id="optB" aria-pressed="false">Accounts Receivable</button>
+  <button type="button" class="choice" id="optC" aria-pressed="false">Deferred Revenue</button>
+  <button type="button" class="choice" id="optD" aria-pressed="false">Deleted items report</button>
+</div>
+<button type="button" id="check">Check</button>
+<button type="button" id="next">Next</button>
+<output id="feedback"></output></fieldset>
+<nav>
+  <button type="button" id="signout">Sign out</button>
+  <button type="button" id="reset">Reset progress</button>
+  <a id="away" href="https://example.com/elsewhere">Course home</a>
+  <a id="here" href="#top">Back to top</a>
+</nav>
+</main>
+<script>
+  // Styled options: the page owns the selected state, like most courseware.
+  for (const b of document.querySelectorAll('.choice')) b.onclick = () => {
+    for (const o of document.querySelectorAll('.choice')) { o.setAttribute('aria-pressed', 'false'); o.classList.remove('selected'); }
+    b.setAttribute('aria-pressed', 'true'); b.classList.add('selected');
+  };
+  document.getElementById('check').onclick = () => {
+    const picked = document.querySelector('.choice.selected');
+    document.getElementById('feedback').textContent = picked && picked.id === 'optC' ? 'Your Answer: correct' : 'Your Answer: incorrect';
+  };
+  document.getElementById('signout').onclick = () => { document.body.dataset.signedOut = 'true'; };
+  document.getElementById('reset').onclick = () => { document.body.dataset.reset = 'true'; };
+</script>

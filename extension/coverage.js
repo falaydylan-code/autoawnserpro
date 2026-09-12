@@ -2,6 +2,11 @@
    Model output proposes a plan. Only observations can verify its completion. */
 (() => {
   const normalize = value => String(value || '').normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
+  // Roles a planned part may point at. `button` is here because many courseware
+  // multiple-choice options are styled buttons, not native radios; without it a
+  // correct click could never be verified and the question could never advance.
+  const ANSWER_ROLES = ['textbox','select','radio','checkbox','option','switch','combobox','spinbutton'];
+  const answerTarget = e => ((ANSWER_ROLES.includes(e.role) || (e.role==='button' && e.choice)) && !e.control) || e.drag==='target';
   function questionId(text, hint='') {
     const stem = normalize(hint || text).replace(/\bpart\s+[a-z0-9]+\s*[:.)-]?/g, '').trim();
     let hash = 2166136261;
@@ -22,8 +27,7 @@
       this.current = q;
       if (action.plan && !q.plan) q.plan = action.plan;
       for (const incoming of action.parts || []) {
-        const target = page.elements.find(e => e.ref === incoming.ref &&
-          (['textbox','select','radio','checkbox','option','switch','combobox','spinbutton'].includes(e.role) || e.drag==='target'));
+        const target = page.elements.find(e => e.ref === incoming.ref && answerTarget(e));
         const prev = q.parts.get(incoming.id);
         if (prev && prev.answer !== '' && normalize(prev.answer) !== normalize(incoming.answer)) {
           throw new Error(`Plan changed for ${prev.what}: "${prev.answer}" to "${incoming.answer}". Stop and review before replacing a committed answer.`);
@@ -65,6 +69,24 @@
       const found=this.partFor(action,page); if(!found)return null;
       const {part,target}=found;
       part.target_key=target.key;
+      return {part,target};
+    }
+    // The model answered a question it never planned parts for. Refusing that
+    // outright killed every plain multiple-choice run on a model that skipped
+    // the checklist. Instead the answer it is giving becomes the plan: one part,
+    // bound to the control it chose, verified the same way as a declared one.
+    // Only for an unplanned question -- a planned one still has to name its part.
+    adopt(action,page) {
+      const q=this.current; if(!q || q.parts.size) return null;
+      const target=page.elements.find(e=>e.ref===(action.action==='drag'?action.to:action.ref));
+      if(!target || !answerTarget(target)) return null;
+      const source=action.action==='drag'?page.elements.find(e=>e.ref===action.ref&&e.drag==='source'):null;
+      if(action.action==='drag' && !source) return null;
+      const answer=action.text || action.option || source?.name || target.name || '';
+      const part={id:'answer',what:(target.name||target.blank||'the answer').slice(0,120),answer,
+        entered:false,verified:false,target_key:target.key,evidence:null,adopted:true};
+      if(source){part.source_key=source.key;part.source_label=source.name;}
+      q.parts.set(part.id,part);
       return {part,target};
     }
     record(action,page,outcome) {

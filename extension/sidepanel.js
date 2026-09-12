@@ -2,7 +2,9 @@
 
 const $ = (id) => document.getElementById(id);
 const DEFAULT_BACKEND = 'https://positive-tranquility-production-9fdc.up.railway.app';
-const ALL_SITES = ['https://*/*', 'http://*/*'];
+// Literally <all_urls>: captureVisibleTab accepts that or activeTab and nothing
+// else, and https://*/* once cost a day of blind runs.
+const ALL_SITES = ['<all_urls>'];
 
 let armed = false;
 let running = false;
@@ -161,10 +163,22 @@ $('eth').onclick = async () => {
     return;
   }
 
+  // Turning ETH off is a stop, not a colour change. A run in progress goes
+  // through the same abort-and-cancel path as the Stop button, and the site
+  // access granted on arming is handed back so red means what it says.
   armed = false;
   await chrome.storage.local.set({ armed });
+  if (running) {
+    await chrome.runtime.sendMessage({ type: 'stop' });
+    running = false;
+  }
+  try {
+    await chrome.permissions.remove({ origins: ALL_SITES });
+  } catch (err) {
+    // Chrome refuses to remove a permission that was never granted; that is fine.
+  }
   paintEth();
-  banner('');
+  banner(running ? 'Stopping.' : 'Off. The agent cannot read or act on any page until ETH is armed again.');
 };
 
 async function accessGranted(origin) {
@@ -262,7 +276,7 @@ chrome.runtime.onMessage.addListener((message) => {
   $('auto_submit').checked = stored.auto_submit === true;
   $('badges').checked = stored.badges !== false;
   await refreshPage();
-  const held = await accessGranted('https://*/*');
+  const held = await accessGranted('<all_urls>');
   if (armed && !held) {
     $('page').textContent += '  ·  access withheld';
   }

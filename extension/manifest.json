@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Assignment Lab 2.0",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Reads the assignment page you already have open and works through it one step at a time.",
   "minimum_chrome_version": "116",
   "permissions": [
@@ -12,7 +12,9 @@
     "sidePanel"
   ],
   "host_permissions": [
-    "https://positive-tranquility-production-9fdc.up.railway.app/*",
+    "https://positive-tranquility-production-9fdc.up.railway.app/*"
+  ],
+  "optional_host_permissions": [
     "<all_urls>"
   ],
   "background": {

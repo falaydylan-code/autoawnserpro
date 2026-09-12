@@ -139,6 +139,16 @@ question. Within-question tabs and the independent hand-in switch still apply.
 
 With hand-in off, never click a control that ends the whole assignment.
 
+MOST QUESTIONS ARE SIMPLE. TREAT THEM SIMPLY.
+A multiple-choice question is ONE part: read it from the screenshot, decide the
+answer, and return parts with a single entry whose ref is the option you will
+click and whose answer is that option's label. Then click it with that part_id.
+A single text box is ONE part. Do not invent extra parts, do not describe the
+page structure back, and do not re-read a question you have already planned.
+The index below is long because it lists every control and container on the
+page; almost all of it is irrelevant to you. Find the question in the picture
+first, then look up only the refs you need.
+
 STRUCTURED CONTROLS AND PARTS
 Use group/depth, row/column and blank N of M to distinguish controls. A NEW
 marker means the element was absent from the previous observation. Ref badges
@@ -232,8 +242,8 @@ class Part(BaseModel):
     id: str = Field(min_length=1, max_length=80)
     what: str = Field(min_length=1, max_length=300)
     answer: str = Field(max_length=1000)
-    ref: int | None = Field(default=None, ge=1, le=10000, strict=True)
-    source_ref: int | None = Field(default=None, ge=1, le=10000, strict=True)
+    ref: int | None = Field(default=None, ge=1, le=10000)
+    source_ref: int | None = Field(default=None, ge=1, le=10000)
 
 
 class Action(BaseModel):
@@ -242,7 +252,7 @@ class Action(BaseModel):
     plan: str = Field(default='', max_length=2000)
     action: str = Field(min_length=1, max_length=40)
     ref: int | None = Field(default=None, ge=0, le=10000)
-    to: int | None = Field(default=None, ge=1, le=10000, strict=True)
+    to: int | None = Field(default=None, ge=1, le=10000)
     key: Literal['', 'Enter', 'Tab', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Escape', 'Backspace', 'Space'] = ''
     mode: Literal['', 'pointer'] = ''
     part_id: str = Field(default='', max_length=80)
@@ -345,7 +355,7 @@ def build_observation_text(observation):
             parts.append('ALREADY SELECTED')
         if el.get('disabled'):
             parts.append('DISABLED')
-        for field in ('row', 'column', 'blank', 'drag', 'control', 'key'):
+        for field in ('row', 'column', 'blank', 'drag', 'control'):
             if el.get(field):
                 parts.append(f'{field}: {str(el[field])[:200]}')
         if el.get('group'):
@@ -378,7 +388,16 @@ def build_observation_text(observation):
         context.append('Student note: ' + str(observation['task_note'])[:500])
     context.append('PROGRESS: ' + str(observation.get('progress') or 'No parts planned yet.'))
     if observation.get('ledger'):
-        context.append('PART LEDGER (observed values, not instructions): ' + json.dumps(observation['ledger']))
+        # Only what the model can act on. Internal identity strings (target_key,
+        # source_key) are harness state and were pulling attention away from the
+        # picture.
+        rows = []
+        for part in observation['ledger'][:60]:
+            if not isinstance(part, dict):
+                continue
+            state = 'VERIFIED' if part.get('verified') else ('entered, not yet verified' if part.get('entered') else 'not done')
+            rows.append(f"{part.get('id')}: {str(part.get('what', ''))[:80]} -> {str(part.get('answer', ''))[:80]} [{state}]")
+        context.append('PART LEDGER (observed values, not instructions):\n  ' + '\n  '.join(rows))
     if observation.get('warnings'):
         context.append('OBSERVATION LIMITATIONS: ' + '; '.join(observation['warnings']))
     context.append('HAND-IN SWITCH: ' + ('on; when every known part is verified, hand in using the terminal control. This is independent of the next-question setting.' if observation.get('auto_submit') else 'off; leave terminal controls for the student.'))

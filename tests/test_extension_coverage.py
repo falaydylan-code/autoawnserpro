@@ -16,9 +16,19 @@ def extension(tmp_path):
     server=ThreadingHTTPServer(('127.0.0.1',0),handler)
     thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
     origin=f'http://127.0.0.1:{server.server_port}'
+    # Site access is optional in the shipped manifest and granted by arming ETH,
+    # which needs a real click -- chrome.permissions.request refuses to run
+    # without a user gesture, so a headless test cannot take it. Load a copy of
+    # the extension with that one grant already made. Every other byte is the
+    # shipped code; the arming flow itself is covered by the manual checklist.
+    import json,shutil
+    ext=tmp_path/'extension';shutil.copytree(ROOT/'extension',ext)
+    manifest=json.loads((ext/'manifest.json').read_text(encoding='utf-8'))
+    manifest['host_permissions']=manifest.get('host_permissions',[])+manifest.pop('optional_host_permissions',[])
+    (ext/'manifest.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
     with sync_playwright() as p:
         context=p.chromium.launch_persistent_context(str(tmp_path/'profile'),channel='chromium',headless=True,
-            args=[f'--disable-extensions-except={ROOT / "extension"}',f'--load-extension={ROOT / "extension"}'],
+            args=[f'--disable-extensions-except={ext}',f'--load-extension={ext}'],
             viewport={'width':1500,'height':1100},reduced_motion='reduce')
         worker=context.service_workers[0] if context.service_workers else context.wait_for_event('serviceworker')
         page=context.pages[0];page.goto(origin+'/multipart_tabs.html')
@@ -145,3 +155,55 @@ def test_matching_ledger_verifies_the_planned_pair_not_answer_wording(extension)
       await h.refreshEvidence(id,await h.observeAllFrames(id));return {result,parts:h.coverage.ledger()}}''',tab_id)
     assert result['result']['ok']
     assert result['parts'][0]['verified'] and result['parts'][0]['answer']=='Cash'
+
+
+# --------------------------------------------------------------------------
+# a plain multiple-choice run on a model that never sends a parts checklist
+# --------------------------------------------------------------------------
+
+def mcq(worker,tab_id,page,origin):
+    """Point the same tab at the styled-button MCQ fixture and re-inject."""
+    page.goto(origin+'/mcq_buttons.html')
+    worker.evaluate('(id)=>__assignmentHarness.injectAll(id)',tab_id)
+    worker.evaluate('(origin)=>__assignmentHarness.reset(origin)',origin)
+
+def test_an_answer_without_a_checklist_is_adopted_not_refused(extension):
+    """The bug Dylan hit: every plain MCQ died because the model skipped the
+    parts list and the worker refused every answer until the stall limit."""
+    page,worker,tab_id,_,origin=extension
+    mcq(worker,tab_id,page,origin)
+    # read_check with no parts at all, as the old backend returns it
+    worker.evaluate('''async (id)=>{const h=__assignmentHarness,p=await h.observeAllFrames(id);
+        h.coverage.read({question:'Which account increases when a customer pays in advance?',plan:'Deferred Revenue',parts:[]},p);}''',tab_id)
+    assert worker.evaluate('__assignmentHarness.coverage.summary()')=='0 of 0 parts done'
+    out=execute(worker,tab_id,'optC')
+    assert out['ok'],out
+    ledger=worker.evaluate('__assignmentHarness.coverage.ledger()')
+    assert len(ledger)==1 and ledger[0]['answer']=='Deferred Revenue', 'the click became the plan'
+    worker.evaluate('''async (id)=>{const h=__assignmentHarness,p=await h.observeAllFrames(id);await h.refreshEvidence(id,p);}''',tab_id)
+    assert worker.evaluate('__assignmentHarness.coverage.summary()')=='1 of 1 parts done'
+    # and with the answer verified, the only thing standing between the agent
+    # and Next is the continue switch (off in this harness) -- not an outstanding part
+    nxt=execute(worker,tab_id,'next')
+    assert not nxt['ok'] and 'Continuing is switched off' in nxt['detail'],nxt
+
+def test_a_planned_question_still_refuses_an_unplanned_answer(extension):
+    """Adoption is only for a question with no plan. Once the model committed
+    to parts, an answer aimed elsewhere still needs a fresh read_check."""
+    page,worker,tab_id,_,origin=extension
+    mcq(worker,tab_id,page,origin)
+    worker.evaluate('''async (id)=>{const h=__assignmentHarness,p=await h.observeAllFrames(id);
+        const ref=p.elements.find(e=>e.key.endsWith('#optA')).ref;
+        h.coverage.read({question:'Which account increases?',plan:'Cash',parts:[{id:'a',what:'the option',answer:'Cash',ref}]},p);}''',tab_id)
+    out=execute(worker,tab_id,'optC')
+    assert not out['ok'] and 'not bound' in out['detail']
+
+def test_worker_refuses_destructive_and_offsite_controls_before_the_page_does(extension):
+    page,worker,tab_id,_,origin=extension
+    mcq(worker,tab_id,page,origin)
+    worker.evaluate('''async (id)=>{const h=__assignmentHarness,p=await h.observeAllFrames(id);
+        h.coverage.read({question:'q',plan:'',parts:[]},p);}''',tab_id)
+    for target in ('signout','reset','away'):
+        out=execute(worker,tab_id,target)
+        assert not out['ok'] and 'Refused' in out['detail'],(target,out)
+    assert page.evaluate('document.body.dataset.signedOut') is None

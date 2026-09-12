@@ -1,6 +1,6 @@
 /* Observation and bounded DOM actions. No model credentials or strategy here. */
 (() => {
-  const VERSION = '0.6.0';
+  const VERSION = '0.6.1';
   if (window.__assignmentLabContent === VERSION) return;
   window.__assignmentLabContent = VERSION;
   let refs = new Map(), previousKeys = new Set(), cancelled = false;
@@ -19,6 +19,11 @@
   const HANDS_IN = /\b(?:submit\s+(?:the\s+)?(?:assignment|quiz|test|exam|work|attempt)|exit\s+assignment|finish\s+(?:assignment|attempt|quiz|test|exam)|hand\s+in|turn\s+in)\b/i;
   const TERMINAL_EXACT = /^(?:submit|submit\s+all(?:\s+answers)?|finish|finish\s+and\s+submit|submit\s+and\s+finish|hand\s+in|turn\s+in|end\s+(?:quiz|test|exam|assignment))$/i;
   const KEYS = new Set(['Enter','Tab','Space','ArrowDown','ArrowUp','ArrowLeft','ArrowRight','Escape','Backspace']);
+  // Destructive, account, consent and download controls. Refused in the page for
+  // click and Enter/Space, the same way hand-in is, so a page instruction the
+  // model repeats cannot reach them. Kept to whole words so "Delete" is caught
+  // but "Deleted items report" as a question option is not.
+  const REFUSED = /^(?:delete|remove|discard|clear(?:\s+all)?|reset|sign\s*out|log\s*out|logout|sign\s*in|log\s*in|login|register|create\s+account|accept(?:\s+all)?|agree|i\s+agree|allow(?:\s+all)?|consent|download|export|unenroll|drop\s+course|withdraw|purchase|buy|pay(?:\s+now)?|checkout)\b.*$/i;
   const clean = s => String(s || '').replace(/\s+/g,' ').trim();
   const parent = el => el.parentElement || el.getRootNode()?.host || null;
   function closest(el, selector) { for(let n=el;n;n=parent(n)) if(n.matches?.(selector)) return n; return null; }
@@ -71,9 +76,23 @@
     if(el.tagName==='A') return 'link';
     return el.tagName.toLowerCase();
   }
+  function external(el) {
+    if(el.tagName!=='A'||!el.getAttribute('href'))return false;
+    try{const url=new URL(el.href,location.href);return /^https?:$/.test(url.protocol)&&url.origin!==location.origin;}catch{return false;}
+  }
+  // A styled multiple-choice option, as opposed to a Check or Next button: it
+  // carries a pressed/selected state, or it stands among sibling buttons inside
+  // a group. Without this a click on an option could never be tied to the plan.
+  function isChoice(el) {
+    if(role(el)!=='button'||classification(el))return false;
+    if(['aria-pressed','aria-checked','aria-selected'].some(a=>el.hasAttribute(a)))return true;
+    const group=closest(el,'[role=group],[role=radiogroup],[role=listbox]');
+    return !!group&&[...group.querySelectorAll('button,[role=button]')].filter(b=>!classification(b)).length>=2;
+  }
   function classification(el) {
     const name=accessibleName(el);
     if(TERMINAL_EXACT.test(name)||HANDS_IN.test(name)) return 'terminal';
+    if(REFUSED.test(name)) return 'refused';
     if(el.getAttribute('role')==='tab' || /^part\s*[a-z0-9]+$/i.test(name)) return 'part';
     if(/^submit answer$/i.test(name) && closest(el,'fieldset,main,form')?.querySelector('[role=tab]')) return 'part';
     if(/^(?:next(?: question)?|continue|proceed|submit answer|high|medium|low)$/i.test(name)) return 'advance';
@@ -152,7 +171,7 @@
       return {ref,key:k,group:local.get(group)||null,depth:Math.min(depth,20),role:role(el),
         name:accessibleName(el).slice(0,400),...blankContext(el),...tableContext(el),
         drag:el.matches(SOURCES)?'source':el.matches(TARGETS)?'target':null,
-        control:classification(el),value:valueOf(el).slice(0,1000),
+        control:classification(el),external:external(el),choice:isChoice(el),value:valueOf(el).slice(0,1000),
         checked:el.checked===true||['aria-checked','aria-selected','aria-pressed'].some(a=>el.getAttribute(a)==='true'),
         disabled:el.disabled===true||el.getAttribute('aria-disabled')==='true',new:!previousKeys.has(k),
         box:{x:Math.round(rect.x),y:Math.round(rect.y),w:Math.round(rect.width),h:Math.round(rect.height)}};
@@ -379,6 +398,8 @@
     if(sensitive(el))return {ok:false,detail:'Refused: credential or payment field.'};
     const activating=action.action==='click'||(action.action==='press'&&['Enter','Space'].includes(action.key));
     if(endsTheAssignment(el)&&activating&&!permit.terminal)return {ok:false,detail:'Refused: hand-in requires the harness to verify all parts and the hand-in switch.'};
+    if(activating&&classification(el)==='refused')return {ok:false,detail:'Refused: "'+accessibleName(el).slice(0,60)+'" is a destructive, account, consent or download control. That stays with the student.'};
+    if(activating&&external(el))return {ok:false,detail:'Refused: that link leaves the assignment site.'};
     if(action.action==='press'&&action.key==='Enter'&&editable(el))return {ok:false,detail:'Enter in a field can submit its form. Use the classified button instead.'};
     if(el.disabled||el.getAttribute('aria-disabled')==='true')return {ok:false,detail:'That control is disabled.'};
     el.scrollIntoView({block:'center',behavior:'instant'});await pause(60);
@@ -423,6 +444,15 @@
     let actual=valueOf(el),verified=false;
     if(evidence.kind==='drag')verified=expected.length>0&&[...el.querySelectorAll(SOURCES)].some(s=>text(s).toLowerCase()===expected&&(!evidence.source_key||key(s)===evidence.source_key));
     else if(['radio','checkbox','option','switch'].includes(role(el))) {actual=accessibleName(el);verified=(el.checked===true||el.getAttribute('aria-checked')==='true'||el.getAttribute('aria-selected')==='true')&&clean(actual).toLowerCase()===expected;}
+    else if(role(el)==='button') {
+      // Styled multiple-choice options. Only a state the page itself exposes
+      // counts; the click having happened does not.
+      actual=accessibleName(el);
+      const stateOn=['aria-pressed','aria-checked','aria-selected'].some(a=>el.getAttribute(a)==='true')
+        ||/(?:^|[\s_-])(?:selected|active|checked|chosen|is-selected|is-active)(?:$|[\s_-])/i.test(el.className||'')
+        ||!!el.querySelector('input:checked');
+      verified=stateOn&&clean(actual).toLowerCase()===expected;
+    }
     else if(el.tagName==='SELECT'){const option=el.selectedOptions[0];verified=!!option&&(clean(option.text).toLowerCase()===expected||clean(option.value).toLowerCase()===expected);}
     else if(editable(el))verified=clean(actual).toLowerCase()===expected;
     return {visible:true,verified,actual:clean(actual).slice(0,1000)};

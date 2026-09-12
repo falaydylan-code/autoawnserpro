@@ -1,5 +1,45 @@
 # Handoff log
 
+## 2026-09-12 — claude — why 0.6.0 could not answer a plain question, and Greptile PR #2
+
+**Did:** Found the cause of "the agent cannot do a simple MCQ": the Railway
+backend was still the 2:15 PM deploy from 2026-09-11, eight hours older than the
+0.6.0 extension. The old `Action` model silently stripped `parts` from every
+reply, so the worker saw no checklist, stalled, and died after six steps. Built
+`deploy-source/` from this branch and deployed; the live `/api/agent/step` now
+returns `parts`. Then loosened what was genuinely too strict: a model that skips
+the checklist is asked once and then its first answer is adopted as the plan
+(`coverage.adopt`) instead of being refused to death; a page that shifts while
+the model is deciding has its own small counter instead of feeding the stall
+limit; styled `<button>` MCQ options are recognised as choices (`choice` flag)
+and verified from `aria-pressed`/selected class, so a button-option question can
+actually reach "1 of 1 parts done"; refs written as strings (`"ref":"7"`) parse;
+the element `key` and raw ledger JSON no longer go to the model. Applied all
+four Greptile findings on PR #2: ETH off now stops a run and removes site
+access; `<all_urls>` moved to `optional_host_permissions`; destructive, account,
+consent, download controls and off-site links are refused in page and worker
+(`REFUSED`, `external`); README limits corrected. Extension 0.6.1.
+
+**Verified:** 134 tests pass (11 new), including the real extension loaded in
+Chromium adopting an unplanned answer on `tests/fixtures/mcq_buttons.html` and
+verifying it from page state. `REFUSED` checked against 21 real labels after the
+first attempt matched nothing — the `\b` had become a literal backspace byte via
+a heredoc, the exact failure already on the hard-way list. Live backend probed
+after deploy: health 200, guest 200, `read_check` reply carries `parts`.
+
+**Left undone:** No live courseware run yet — Dylan has to reload the extension
+and try a real page. `captureVisibleTab` needs `<all_urls>`; if a run reports
+"Screenshot unavailable", ETH was armed before this version and needs re-arming.
+The 401-per-step in the logs is masked by caching the token in the worker, not
+explained. On a screenshot-less probe MiniMax planned one part per answer option;
+if a four-option MCQ shows "0 of 4 parts done", that is the prompt, not the gate.
+
+**Watch out:** `background.js` is dense one-statement-per-line code since 0.6.0;
+it works and is tested, but it is slow to read. The original `assignment-agent`
+checkout has a stale `.git/rebase-merge` directory from the PR #1 work; harmless,
+untouched. Extension and backend must ship together — this is the second time
+one moved without the other.
+
 ## 2026-09-12 ? Codex ? separate GitHub repository
 
 **Did:** Prepared the complete current application for the user-requested private

@@ -52,6 +52,20 @@ Informed by observed browser-agent behavior; this is our own implementation.
   switch on and all known parts verified. The page executor defaults to refusal,
   including Enter/Space on terminal buttons. Enter in a field is refused because
   it can implicitly submit a form. Part tabs work independently of Keep going.
+- **Destructive, account, consent and download controls are refused** in the
+  page (`REFUSED` in `content.js`, classified `control: 'refused'`) and again in
+  the worker, for click and Enter/Space. So are links that leave the site
+  (`external`). Same-origin navigation and neutral buttons like Check or Show
+  hint stay clickable, because courseware needs them.
+- **Site access is optional and ETH owns it.** The manifest requires only the
+  backend host; `<all_urls>` is an optional permission taken when ETH is armed
+  and handed back when it is disarmed, which also stops a run in progress. It has
+  to be literally `<all_urls>` — `captureVisibleTab` accepts nothing narrower.
+- **An answer without a plan becomes the plan.** A model that skips the parts
+  checklist is asked once more, then its first answer is adopted as a one-part
+  ledger (`coverage.adopt`) and verified from page state like any declared part.
+  A question that *was* planned still refuses an answer aimed at an unplanned
+  control. Refusing the unplanned case outright killed every plain MCQ run.
 - **Private and internal addresses are blocked** (`safe_url` in `app.py`), so
   the public endpoint cannot be aimed at the host's own network.
 - **The run stops if the tab changes origin**, and controls from frames of any

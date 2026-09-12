@@ -3,7 +3,7 @@ import './coverage.js';
 const DEFAULT_BACKEND='https://positive-tranquility-production-9fdc.up.railway.app';
 const SESSION_STEPS=900, STALL_LIMIT=6, NAV_BUDGET=8;
 const state={running:false,stopRequested:false,tabId:null,steps:0,questions:0,cost:0,progress:'',log:[]};
-let coverage=new AssignmentCoverage.Coverage(), decisionAbort=null;
+let coverage=new AssignmentCoverage.Coverage(), decisionAbort=null, runToken='';
 let refMap=new Map(), frameIds=[0], activeFrameIds=[],runOrigin='',actionFrameId=0;
 async function settings(){const s=await chrome.storage.local.get(['backend','token','model','note','advance','auto_submit','badges']);return {backend:(s.backend||DEFAULT_BACKEND).replace(/\/+$/,''),token:s.token||'',model:s.model||'',note:s.note||'',advance:s.advance===true,auto_submit:s.auto_submit===true,badges:s.badges!==false};}
 function snapshot(){return {running:state.running,steps:state.steps,questions:state.questions,cost:state.cost,progress:state.progress};}
@@ -81,12 +81,22 @@ async function capture(tabId,page,badgeEnabled){
   }catch(e){throw new Error('Screenshot unavailable: '+e.message+'. Re-select the assignment tab and grant site access. No blind model call was made.');}
   finally{await Promise.all(activeFrameIds.map(frameId=>chrome.tabs.sendMessage(tabId,{type:'badges_off'},{frameId}).catch(()=>{})));}
 }
-function answering(action,page){const e=page.elements.find(e=>e.ref===action.ref);return ['fill','select','drag'].includes(action.action)||(action.action==='click'&&['radio','checkbox','option','switch'].includes(e?.role));}
+function answering(action,page){const e=page.elements.find(e=>e.ref===action.ref);return ['fill','select','drag'].includes(action.action)||(action.action==='click'&&(['radio','checkbox','option','switch'].includes(e?.role)||(e?.role==='button'&&e?.choice)));}
 async function executeAction(tabId,action,page,config){
   await refreshEvidence(tabId,page);
   const refusal=coverage.gate(action,page,config);
   if(refusal)return {ok:false,blocked:true,detail:refusal};
-  if(answering(action,page)&&!coverage.bind(action,page))return {ok:false,detail:'Action is not bound to a planned answer or drag pairing. Re-read with parts/ref and source_ref for a drag before acting.'};
+  // Non-answer clicks: only classified controls (part tabs, advance, terminal),
+  // answer controls, and neutral buttons may be clicked. Links that leave the
+  // page and anything named like a destructive, account or consent action are
+  // refused here as well as in the page, so a page instruction the model
+  // repeats cannot reach them.
+  const clickTarget=page.elements.find(e=>e.ref===action.ref);
+  if(clickTarget&&(action.action==='click'||(action.action==='press'&&['Enter','Space'].includes(action.key)))){
+    if(clickTarget.control==='refused')return {ok:false,blocked:false,detail:'Refused: "'+(clickTarget.name||'').slice(0,60)+'" is a destructive, account, consent or download control. Those stay with the student.'};
+    if(clickTarget.role==='link'&&clickTarget.external)return {ok:false,detail:'Refused: that link leaves the assignment site.'};
+  }
+  if(answering(action,page)&&!coverage.bind(action,page)&&!coverage.adopt(action,page))return {ok:false,detail:'Action is not bound to a planned answer or drag pairing. Re-read with parts/ref and source_ref for a drag before acting.'};
   const oscillation=coverage.oscillation(action,page);if(oscillation)return {ok:false,blocked:true,detail:oscillation};
   const target=page.elements.find(e=>e.ref===action.ref);
   const terminal=target?.control==='terminal';
@@ -110,12 +120,13 @@ async function decide(config, observation) {
     body: JSON.stringify(observation), signal: decisionAbort?.signal
   });
 
-  let token = config.token || await guestToken(config.backend);
+  let token = runToken || config.token || await guestToken(config.backend);
   let res = await call(token);
   if (res.status === 401) {                       // token expired or backend restarted
     token = await guestToken(config.backend);
     res = await call(token);
   }
+  runToken = token;
   if (!res.ok) {
     let detail = '';
     try {
@@ -134,11 +145,11 @@ async function decide(config, observation) {
 async function run(tabId){
   if(state.running)throw new Error('Already running.');
   Object.assign(state,{running:true,stopRequested:false,tabId,steps:0,questions:0,cost:0,progress:'',log:[]});
-  coverage=new AssignmentCoverage.Coverage();decisionAbort=new AbortController();
-  let checked=false,recheck=false,stalls=0,navSteps=0,lastAction={},lastDigest='',sinceRead=0;
+  coverage=new AssignmentCoverage.Coverage();decisionAbort=new AbortController();runToken='';
+  let checked=false,recheck=false,stalls=0,navSteps=0,lastAction={},lastDigest='',sinceRead=0,askedForParts=false,shifted=0;
   try{
     const tab=await chrome.tabs.get(tabId);runOrigin=new URL(tab.url).origin;
-    await injectAll(tabId);emit({kind:'info',message:'Reading '+new URL(tab.url).host+' · extension 0.6.0'});
+    await injectAll(tabId);emit({kind:'info',message:'Reading '+new URL(tab.url).host+' · extension '+chrome.runtime.getManifest().version});
     while(!state.stopRequested&&state.steps<SESSION_STEPS){
       const config=await settings(),current=await chrome.tabs.get(tabId);
       if(new URL(current.url).origin!==runOrigin)throw new Error('The tab moved to a different site. Run stopped.');
@@ -156,16 +167,28 @@ async function run(tabId){
       if(state.stopRequested)break;
       const latest=await chrome.tabs.get(tabId);
       if(!latest.active||new URL(latest.url).origin!==runOrigin)throw new Error('The active tab or origin changed while the model was answering. Nothing was clicked.');
-      if(await digestNow(tabId)!==page.digest){stalls++;recheck=true;emit({kind:'warn',message:'Page changed while deciding. Discarded the stale action.'});continue;}
+      if(await digestNow(tabId)!==page.digest){
+        // A live region or animation can shift the page during the model call.
+        // That is a reason to look again, not evidence the agent is stuck, so it
+        // has its own small counter instead of feeding the stall limit.
+        if(++shifted>=4)throw new Error('The page kept changing on its own while the model was deciding, four times in a row. Wait for it to settle, then start again.');
+        recheck=true;emit({kind:'warn',message:'Page changed while deciding. Discarded the stale action and looking again.'});continue;}
+      shifted=0;
       if(!checked&&action.action!=='read_check'){stalls++;continue;}
       if(action.action==='read_check'){
         if(!action.has_question){
           if(!checked||!config.advance){emit({kind:'stop',message:'No question to answer. '+(action.reason||'')});break;}
           if(++navSteps>NAV_BUDGET)throw new Error('Could not reach another question.');recheck=false;continue;
         }
-        if(!action.parts?.length){stalls++;recheck=true;emit({kind:'warn',message:'Model omitted the parts checklist. Asking it to read all parts before acting.'});continue;}
+        if(!action.parts?.length){
+          // Ask for the checklist once. If the model still will not give one, let
+          // it answer anyway and adopt that answer as the plan (coverage.adopt).
+          // Stalling here six times was how every plain multiple-choice run died.
+          if(!askedForParts){askedForParts=true;recheck=true;emit({kind:'warn',message:'Model omitted the parts checklist. Asking once more before proceeding without one.'});continue;}
+          emit({kind:'warn',message:'No parts checklist. Proceeding: the first answer entered will be taken as the plan for this question.'});
+        }
         const before=coverage.summary(),fresh=coverage.read(action,page);
-        if(fresh){state.questions++;stalls=0;}
+        if(fresh){state.questions++;stalls=0;askedForParts=false;}
         else if(before===coverage.summary()&&sinceRead===0)stalls++;
         checked=true;recheck=false;navSteps=0;sinceRead=0;
         await refreshEvidence(tabId,page);emit({kind:'question',message:action.question});emit({kind:'progress',message:coverage.summary()});lastAction={action:'read_check'};continue;

@@ -62,7 +62,10 @@ If you point Backend at a different host, add that host to `host_permissions` in
 
 **ETH is the approval.** The first time you turn it green, Chrome asks once
 whether Assignment Lab may read your sites. Say yes and it never asks again, on
-any site. Turn ETH red and the agent cannot touch a page at all.
+any site. Turn ETH red and two things happen: a run in progress stops through
+the same path as the Stop button, and the site access you granted is handed
+back to Chrome. Arming again asks again. The only site the extension can always
+reach is its own backend.
 
 If Chrome withholds access anyway -- it sometimes does this to extensions that
 can read every site -- the panel says so and offers an Open Details button.
@@ -74,18 +77,26 @@ is going.
 
 ## Limits
 
-Sixteen steps per question, 900 per run, and it stops on its own if four
-observations in a row come back identical. It also gives up after eight
-consecutive attempts to find the next question.
+The step budget per question grows with the question: 6 steps plus 4 for each
+part it planned (a three-blank question gets 18), capped at 100. A run is capped
+at 900 steps. It stops on its own after six actions in a row that produced no
+verified progress, and gives up after eight consecutive attempts to find the
+next question. If the page keeps changing by itself while the model is deciding,
+four times in a row, it stops and asks you to wait for the page to settle.
 
 Those are the real ceilings and they are deliberately generous, because a long
-set can run 60 questions or more. At roughly 3-5 model calls per question a full
-set costs somewhere around ten to fifteen cents. The hard limit on spending is
-on the backend: MAX_CALLS_PER_INVITE and MAX_COST_PER_INVITE, metered per
-network rather than per install.
+set can run 60 questions or more. The hard limit on spending is on the backend:
+MAX_CALLS_PER_INVITE and MAX_COST_PER_INVITE, metered per network rather than
+per install.
 
-To make a run cheaper or shorter, lower STEP_BUDGET, SESSION_STEPS and
-NAV_BUDGET at the top of background.js.
+To make a run cheaper or shorter, lower SESSION_STEPS, STALL_LIMIT or NAV_BUDGET
+at the top of background.js, or the budget() formula in coverage.js.
+
+Some controls are never operated whatever the page or the model says: anything
+that hands in the assignment (unless the hand-in switch is on and every part is
+verified), anything named like delete, remove, reset, sign out, sign in,
+register, accept, agree, allow, download, export, purchase or pay, and any link
+that leaves the assignment site.
 
 ## Costs
 
