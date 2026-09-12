@@ -1,0 +1,9 @@
+<!doctype html><meta charset="utf-8"><title>Ordering regression</title>
+<style>li{padding:20px;margin:8px;border:1px solid;width:300px;touch-action:none;user-select:none}ol{width:350px}</style>
+<h1>Order the income statement</h1><ol id="order" data-sortable><li id="net" draggable="true">Net Income</li><li id="revenue" draggable="true">Revenues</li><li id="expense" draggable="true">Expenses</li></ol>
+<script>
+let held=null,start=0;
+document.addEventListener('dragstart',e=>e.preventDefault());
+document.addEventListener('pointerdown',e=>{if(e.target.matches('li')){held=e.target;start=e.clientY;}});
+document.addEventListener('pointerup',e=>{const t=e.target.closest('li');if(held&&t&&t!==held&&Math.abs(e.clientY-start)>10){const r=t.getBoundingClientRect();order.insertBefore(held,e.clientY<r.top+r.height/2?t:t.nextSibling);}held=null;});
+</script>

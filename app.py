@@ -373,7 +373,19 @@ class ObservedElement(BaseModel):
     checked: bool = False
     disabled: bool = False
     new: bool = False
+    choice: bool = False
+    external: bool = False
+    dropdown: bool = False
+    owner_ref: int | None = None
+    list_ref: int | None = None
+    order_index: int | None = None
     box: dict[str, Annotated[float, Field(allow_inf_nan=False, ge=-10_000_000, le=10_000_000)]] | None = None
+
+
+class VerificationTarget(BaseModel):
+    part_id: str = Field(min_length=1, max_length=80)
+    what: str = Field(max_length=300)
+    kind: Literal['value', 'ordering'] = 'value'
 
 
 class Observation(BaseModel):
@@ -386,7 +398,9 @@ class Observation(BaseModel):
     page_changed: bool = True
     last_action: dict = Field(default_factory=dict)
     task_note: str = Field(default='', max_length=2000)
-    phase: Literal['', 'read_check', 'act', 'must_act', 'navigate'] = ''
+    phase: Literal['', 'read_check', 'act', 'must_act', 'navigate', 'verify'] = ''
+    observation_id: str = Field(default='', max_length=80)
+    verification: VerificationTarget | None = None
     plan: str = Field(default='', max_length=2000)
     progress: str = Field(default='', max_length=4000)
     ledger: list[ObservedPart] = Field(default_factory=list, max_length=60)
@@ -394,6 +408,11 @@ class Observation(BaseModel):
     auto_submit: bool = False
     advance: bool = False
     model: str = Field(default='', max_length=200)
+
+
+@app.get('/api/capabilities')
+async def capabilities():
+    return {'protocol': 2, 'extension': '0.7.0', 'features': ['parts', 'ordering', 'visual_input', 'visual_verification']}
 
 
 @app.post('/api/agent/step')
@@ -421,10 +440,13 @@ async def agent_step(body: Observation, request: Request, who=Depends(owner)):
             require = 'read_check'
         elif body.phase == 'must_act':
             require = 'act'
+        elif body.phase == 'verify':
+            require = 'verify'
         action = await agent.decide(budget_key(who, request), body.model_dump(), selected, record,
                                     require=require)
     except ValueError as exc:
-        raise HTTPException(400, str(exc)) from None
+        return JSONResponse(status_code=400, content={'detail':str(exc), 'cost':record.get('cost'),
+            'input_tokens':record.get('input_tokens'), 'output_tokens':record.get('output_tokens')})
     return {
         'action': action.model_dump(),
         'cost': record.get('cost'),

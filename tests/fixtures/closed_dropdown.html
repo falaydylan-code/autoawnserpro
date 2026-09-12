@@ -1,0 +1,6 @@
+<!doctype html><meta charset="utf-8"><title>Visual fallback fixture</title>
+<style>td{padding:20px;border:1px solid}button{padding:12px}</style>
+<h1>Classify Accounts Payable</h1><table><tr><th>Account</th><th>Type</th></tr><tr><td>Accounts Payable</td><td><answer-box></answer-box></td></tr></table>
+<script>
+customElements.define('answer-box',class extends HTMLElement{constructor(){super();const s=this.attachShadow({mode:'closed'});s.innerHTML='<button style="padding:15px">Choose type</button>';s.querySelector('button').onclick=()=>{s.innerHTML='<button style="padding:15px">Liability</button>';s.querySelector('button').onclick=()=>{s.innerHTML='<span>Liability</span>';};};}});
+</script>
