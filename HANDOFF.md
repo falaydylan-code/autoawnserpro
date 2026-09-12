@@ -1,5 +1,44 @@
 # Handoff log
 
+## 2026-09-12 — claude — finished Codex's ordering / dropdown / visual-fallback plan (0.7.0)
+
+**Did:** Codex implemented `plans/visual-ordering/PLAN.md` on
+`codex/visual-ordering` and hit its usage limit at the smoke script. Snapshotted
+its tree as a WIP commit before reading it (152 tests green as left), then
+finished the plan: sidebar explanation of the debugger permission; the
+failure-mode tests the plan named; MiniMax smoke runs on all three new fixtures
+through the loaded extension, fixing what stopped them; protocol-2 backend
+deployed to Railway and confirmed live; the extension run once against the
+*deployed* backend. Every smoke-run fix has a test that drives the real
+extension through the exact sequence the live run produced
+(`tests/test_smoke_findings*.py`, `tests/test_visual_failure_modes.py`).
+
+**Verified:** 165 tests. MiniMax through the loaded extension: 20-cell
+custom-dropdown table 20/20 verified and every value academically correct (52
+steps, $0.096); pointer-only ordering 1/1 (5 steps, $0.01); closed shadow root
+via the debugger path 1/1 screenshot-verified (5 steps, $0.007); ordering again
+against the live Railway backend 1/1 (3 steps). `/api/capabilities` on Railway
+returns protocol 2.
+
+**Left undone:** The McGraw Hill validation in an accessible practice session —
+needs Dylan's login; the fixture selectors (`td.dropDownList`, `td[dropdowntype]`,
+`td.responseCell[tabindex]`) are Codex's reading of Connect and are unconfirmed
+against the real page. Publication to `awnseragent2.0` — no remote for it exists
+on this machine; the work is on `codex/visual-ordering` in `autoawnserpro`, not
+yet pushed or PR'd. `background.js` remains dense one-statement-per-line code.
+
+**Watch out:** Two real bugs were found by tests Codex had not written yet: a
+Stop arriving mid-drag released the mouse at the *destination* and completed the
+drop being cancelled (now releases at the origin), and a DOM check that cannot
+read a closed-shadow control was overwriting the screenshot verdict every step,
+so a verified answer became unverified again immediately. Six of the eight smoke
+fixes were the harness refusing the model over form — verb choice, a missing
+`part_id`, a missing `kind`, a sharpened label, an early `done`, a stray
+`verify` — each unambiguous from evidence the harness already held. That pattern
+is now on the hard-way list. The loaded-extension tests need `--load-extension`
+Chromium; `chrome.debugger` works there alongside Playwright's own CDP session.
+The 0.7.0 extension will not start against any backend older than this deploy.
+
 ## 2026-09-12 — claude — Greptile PR #3 driven 3/5 → 5/5 in five rounds
 
 **Did:** Opened PR #3 (`claude/coverage-fixes` → `main`) carrying Codex's 0.6.0

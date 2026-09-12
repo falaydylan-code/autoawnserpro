@@ -170,6 +170,18 @@ Do not undo these without a reason, and add to the list when you find another.
 - **Worktree for question coverage:** `C:/Users/falay/assignment-agent-question-coverage`
   on `codex/question-coverage`. The original checkout has a pre-existing rebase;
   Codex deliberately did not resolve or overwrite it.
+- **The model's slips are the harness's to absorb, not to punish.** Live runs
+  with MiniMax kept dying on form, not substance: `select` on a menu option,
+  a forgotten `part_id`, a forgotten `kind:"ordering"`, "Equity" sharpened to
+  "Stockholders' Equity", a `done` one click early, a stray `verify`. Each was
+  unambiguous from the plan and the page. Resolve what can be resolved from
+  evidence the harness already holds; spend a stall and re-ask on the rest;
+  stop only for what cannot be recovered. Every such fix has a test driving the
+  real extension through the exact sequence a live run produced.
+- **Extension and backend ship together.** 0.6.0 spent a day unable to answer a
+  plain question because Railway was still on the previous backend. 0.7.0
+  refuses to start without `/api/capabilities` protocol 2. Deploy first, then
+  reload the extension, then test.
 - **Never swallow an error.** `captureVisibleTab` failed silently for a day and
   the agent answered coursework with no screenshot at all. If something degrades
   the run, say so in the log, loudly, once.

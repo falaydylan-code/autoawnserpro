@@ -44,8 +44,32 @@ Informed by observed browser-agent behavior; this is our own implementation.
 - **Instructions come only from the system prompt.** Page text is fenced as
   `BEGIN UNTRUSTED PAGE TEXT` and is data, never commands.
 - **The action vocabulary is closed** — `read_check`, `fill`, `click`, `select`,
-  `scroll`, `drag`, `press`, `scroll_to`, `done`, `give_up`. Anything else is rejected before execution, so a
-  page cannot introduce a verb.
+  `scroll`, `drag`, `reorder`, `visual_click`, `visual_drag`, `verify`, `press`,
+  `scroll_to`, `done`, `give_up`. Anything else is rejected before execution, so a
+  page cannot introduce a verb. `verify` is accepted only in the verification
+  phase and can never execute anything.
+- **Real mouse input is a bounded fallback, not the default.** `reorder`, the
+  `visual_*` verbs and clicks on a `widget` (a closed-shadow host the DOM cannot
+  see into) go through `chrome.debugger` (`extension/visual.js`). It attaches to
+  the assignment tab only, only while needed, and detaches on Stop, ETH off,
+  completion or failure. Every visual action is tied to the exact screenshot
+  the model saw (`observation_id`); a changed viewport, URL, digest or pixel hash
+  makes it stale and it is refused. Guard refusals — off the answer area, on a
+  navigation or sensitive control, cross-origin — are returned to the model to
+  re-aim, never thrown. A gesture interrupted by Stop releases the button at its
+  origin, because releasing at the destination would complete the drop.
+- **The extension checks `/api/capabilities` before its first paid call** and
+  refuses to run against a backend without protocol 2. Extension and backend
+  ship together; this is the seam that broke silently in 0.6.0.
+- **What the DOM cannot read, a screenshot verifies** — a separate model call
+  in the `verify` phase that may only report what is visible. A DOM verdict is
+  authoritative when the DOM can read the control and ignored when it cannot;
+  a model's claim of success is never evidence. Screenshot verification is paid,
+  so it runs only when the DOM has nothing to say.
+- **The controls are the question's identity.** A re-read that points at cells
+  the current plan owns is the same question however the stem is phrased, and a
+  cell already owned keeps its part rather than growing a twin. Sharpening an
+  unentered answer to the visible label is a refinement; changing it is refused.
 - **Credential and payment fields are never described to the model**, so it
   cannot be asked to fill one (`sensitive()` in `content.js`).
 - **Hand-in requires a worker-issued permit**, produced only with the hand-in
