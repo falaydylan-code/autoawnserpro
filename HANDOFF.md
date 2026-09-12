@@ -5,6 +5,38 @@ Newest first. Both agents append here before finishing a session. Four lines:
 
 ---
 
+## 2026-09-11 — claude — task split: who builds what, after a plan is agreed
+
+**Did:** Added the half that follows the review loop. A `READY TO SHIP` plan now
+carries a `## Tasks` checklist naming an owner, the files that task may touch,
+what it waits on, and a ground for the owner. `planloop.py tasks|run|done` reads
+it: `tasks` refuses a split where two agents own one file, where a task bounds
+nothing, or where a dependency is missing or circular; `run` hands one Codex task
+to `codex exec` bounded to that task's files; `done` ticks it off and says what
+unblocked. `enforce_boundary` now takes an `allowed` list, so the same guard
+serves a review round (plan folder only) and a task (its own files only).
+
+**Verified:** 91 tests pass, 21 of them new. Drove the three commands on a
+scratch plan: the split printed, `run` on a Claude task and on a missing id both
+refused, `done` reported T2 as newly ready, and a second `done` on the same task
+reported nothing changed. A declared file does not let `agent.py.bak` through.
+
+**Left undone:** Nothing dispatches Claude's own tasks — deliberate, Claude is
+not a subprocess. No plan has a Tasks section yet; the first real one will be the
+test of whether Codex actually reassigns anything.
+
+**Watch out:** Dylan asked for the split to be unbiased, by what each model is
+better at. There is no trustworthy head-to-head data on `gpt-6-astra` against
+Claude Opus 5 for this repo, so a strengths table would have been invention — and
+invention by the party doing the dividing. Ownership is argued from a closed list
+of harness and file facts instead (`GROUNDS` in `planloop/tasks.py`), any other
+ground is refused in code, and `review-prompt.md` tells Codex explicitly that it
+may overturn any assignment and that neither side may argue from model quality.
+If someone later adds a `better-at-X` ground, that is the guard being removed,
+not extended. A test asserts no ground mentions a model.
+
+---
+
 ## 2026-09-11 — claude — plan review loop between Claude and Codex
 
 **Did:** Built `planloop/`. Claude drafts a plan, `codex exec` reviews it against

@@ -235,23 +235,38 @@ def build_prompt(slug: str, number: int) -> str:
 
 
 def enforce_boundary(slug: str, baseline: set[str] | None = None,
-                     round_dir: Path | None = None) -> list[str]:
-    """Codex reviews the code. It does not get to edit it through this door.
+                     round_dir: Path | None = None,
+                     allowed: list[str] | None = None) -> list[str]:
+    """Codex stays inside what it was given. Everything else is put back.
 
-    Only files that changed *during* this round count. Whatever was already
-    uncommitted belongs to Claude and is left alone -- reverting that would
-    destroy work in progress.
+    During a review round that means the plan folder only -- Codex reviews the
+    code, it does not get to edit it through this door. During a task it means
+    the files that task declared, and nothing else, because Claude may be
+    editing the rest at the same time.
 
-    A tracked file is reverted. A file Codex newly created outside the plan
-    folder is moved into the round's `rejected/` folder rather than deleted, so
-    nothing is silently thrown away.
+    Only files that changed *during* the round or task count. Whatever was
+    already uncommitted belongs to Claude and is left alone -- reverting that
+    would destroy work in progress.
+
+    A tracked file is reverted. A file Codex newly created outside its bounds is
+    moved into `rejected/` rather than deleted, so nothing is silently thrown
+    away.
     """
-    allowed = f"plans/{slug}/"
+    permitted = [p.replace("\\", "/") for p in (allowed or [f"plans/{slug}/"])]
     baseline = baseline or set()
-    strays = sorted(
-        path for path in changed_files() - baseline
-        if not path.replace("\\", "/").startswith(allowed)
-    )
+
+    def inside(path: str) -> bool:
+        """A permitted entry ending in `/` is a folder; anything else is one file."""
+        normalised = path.replace("\\", "/")
+        for entry in permitted:
+            if entry.endswith("/"):
+                if normalised.startswith(entry):
+                    return True
+            elif normalised == entry:
+                return True
+        return False
+
+    strays = sorted(path for path in changed_files() - baseline if not inside(path))
     for path in strays:
         target = REPO / path
         tracked = subprocess.run(
@@ -382,14 +397,37 @@ def main() -> None:
     status = sub.add_parser("status", help="show where a plan stands")
     status.add_argument("slug")
 
+    tasks_cmd = sub.add_parser("tasks", help="show the task split and check it holds")
+    tasks_cmd.add_argument("slug")
+
+    run = sub.add_parser("run", help="hand one Codex-owned task to Codex")
+    run.add_argument("slug")
+    run.add_argument("task_id")
+
+    done_cmd = sub.add_parser("done", help="tick a finished task off the plan")
+    done_cmd.add_argument("slug")
+    done_cmd.add_argument("task_id")
+
     args = parser.parse_args()
     PLANS.mkdir(exist_ok=True)
+
     if args.command == "new":
         cmd_new(args.slug, args.title)
     elif args.command == "review":
         cmd_review(args.slug)
-    else:
+    elif args.command == "status":
         cmd_status(args.slug)
+    else:
+        # The task commands live in their own module; this one stays about the
+        # review loop. They reach back here for fail/plan_dir/enforce_boundary.
+        import commands
+        driver = sys.modules[__name__]
+        if args.command == "tasks":
+            commands.cmd_tasks(driver, args.slug)
+        elif args.command == "run":
+            commands.cmd_run(driver, args.slug, args.task_id)
+        else:
+            commands.cmd_done(driver, args.slug, args.task_id)
 
 
 if __name__ == "__main__":

@@ -74,6 +74,48 @@ Rules that make it mean something:
 
 Each round spends Dylan's Codex quota, which is why it is on request only.
 
+## Who builds what
+
+Once a plan is `READY TO SHIP` it gets a `## Tasks` section, and nothing is built
+before it has one. Each task names an owner, the files it may touch, what it
+waits on, and a ground for its owner:
+
+    ## Tasks
+
+    - [ ] **T1** · codex · files: `agent.py`, `tests/test_agent.py`
+      Why codex: self-contained
+      Add a press action to the closed vocabulary.
+      Done when: pytest -q passes and a press action validates.
+
+    - [ ] **T2** · claude · after: T1 · files: `extension/background.js`
+      Why claude: needs-browser
+      Wire press into the loop and watch it fire on a real page.
+
+    python planloop/planloop.py tasks <slug>       # the split, and whether it holds
+    python planloop/planloop.py run <slug> T1      # hand a codex task to Codex
+    python planloop/planloop.py done <slug> T1     # tick it off
+
+**One file, one owner.** Two agents editing the same file means the second to
+finish overwrites the first and neither notices, so `tasks` refuses a split that
+does it. It also refuses a task that declares no files, a dependency on a task
+that does not exist, and a task that waits on itself. `run` bounds Codex to the
+files its task declared; anything else it touches is put back, the same way a
+review round is bounded to the plan folder.
+
+**Ownership is argued from the harness, never from which model is better.** There
+is no trustworthy head-to-head data on `gpt-6-astra` against Claude Opus 5 for
+this work, so neither agent may claim the interesting half on that basis, in
+either direction. The grounds are a closed list and anything else is refused:
+
+`needs-browser`, `needs-sandbox`, `self-contained`, `needs-judgement`,
+`sole-owner`, `follows-on`, `cross-cutting`, `either-could`.
+
+`either-could` is the honest answer when no ground applies, and three of them
+landing on one side is reported. The split is then part of what Codex reviews —
+it may move any task whose ground does not hold, and say so. Claude drafting the
+division and Codex being able to overturn it is what keeps it fair; a strengths
+table written by one of the two would not.
+
 ## What this project is
 
 A Chrome extension that reads the assignment page a student already has open,
