@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Assignment Lab",
+  "name": "Assignment Lab 2.0",
   "version": "0.6.0",
   "description": "Reads the assignment page you already have open and works through it one step at a time.",
   "minimum_chrome_version": "116",
@@ -23,7 +23,7 @@
     "default_path": "sidepanel.html"
   },
   "action": {
-    "default_title": "Open Assignment Lab"
+    "default_title": "Open Assignment Lab 2.0"
   },
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'"

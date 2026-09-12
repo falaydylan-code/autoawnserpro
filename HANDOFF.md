@@ -1,5 +1,15 @@
 # Handoff log
 
+## 2026-09-12 ? Codex ? separate GitHub repository
+
+**Did:** Prepared the complete current application for the user-requested private
+`falaydylan-code/awnseragent2.0` repository, including the Assignment Lab 2.0 rename.
+**Verified:** Existing coverage suite passed 123 tests; publication checks rerun.
+**Left undone:** This upload does not deploy the matching backend or repair the
+reported McGraw Hill checklist/dropdown regressions.
+**Watch out:** Original repository and Claude checkout remain separate.
+
+
 ## 2026-09-11 — Codex — question coverage 0.6.0
 
 **Did:** Executed the user-authorized full plan on `codex/question-coverage` in

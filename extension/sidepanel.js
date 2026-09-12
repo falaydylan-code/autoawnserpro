@@ -101,7 +101,7 @@ $('copylog').onclick = async () => {
     if (e.raw) bits.push('  raw: ' + e.raw);
     return bits.join('\n');
   });
-  const header = `Assignment Lab log — ${new Date().toLocaleString()}\n`
+  const header = `Assignment Lab 2.0 log — ${new Date().toLocaleString()}\n`
     + `${$('questions').textContent} questions, ${$('steps').textContent} steps, ${$('cost').textContent}\n`
     + `page: ${$('page').textContent}\n${'-'.repeat(60)}`;
   try {
