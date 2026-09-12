@@ -1,5 +1,37 @@
 # Handoff log
 
+## 2026-09-12 — claude — Greptile PR #3 driven 3/5 → 5/5 in five rounds
+
+**Did:** Opened PR #3 (`claude/coverage-fixes` → `main`) carrying Codex's 0.6.0
+plus the fixes below, and worked Greptile's findings until it scored 5/5 with
+no actionable findings at `0a51bc6`. Round 1: the hand-in gate only checked
+unplanned text boxes — now every answer control counts, with a bound option
+covering its radio/choice siblings; and the task boundary compared paths, so
+a file dirty before Codex ran *and* edited by Codex slipped through — the
+baseline now snapshots dirty files by content and restores a co-edited one.
+Rounds 2–5 were all the checkbox decision snapshot (`q.seen`): checkboxes are
+independent so a sibling is only "decided" if it was on screen when the plan
+was made; that snapshot is frozen at the first plan and never widened; it
+waits for the first read that carries parts; and it waits for a part that
+actually binds to a control. Greptile's round-2 suggestion (drop checkboxes
+from the exemption) was declined on the thread with a reason — it would have
+made every select-all-that-apply question impossible to hand in.
+
+**Verified:** 141 tests, 18 new since 0.6.0, each round's fix driven through
+the real extension in Chromium along the exact sequence Greptile described.
+Greptile re-reviews only when mentioned (`@greptileai review`) on this repo;
+pushing alone did not trigger it.
+
+**Left undone:** Nothing merged. PR #2 (an uploaded copy of the extension
+folder, no history) is superseded and should be closed. No live courseware run
+of 0.6.1 yet — that is still the real test.
+
+**Watch out:** A shell heredoc mangled a commit message into a pasted script
+and it reached GitHub before the chain failed; replaced by force-push on this
+branch only (`31fb849 → 0c95dbb`, identical tree). Commit messages and PR
+replies are now written to files first. That is the third heredoc incident
+in this repo; treat heredocs as unsafe for anything containing a backslash.
+
 ## 2026-09-12 — claude — why 0.6.0 could not answer a plain question, and Greptile PR #2
 
 **Did:** Found the cause of "the agent cannot do a simple MCQ": the Railway
