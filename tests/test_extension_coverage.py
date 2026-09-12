@@ -291,3 +291,28 @@ def test_a_re_read_does_not_launder_a_checkbox_that_appeared_after_planning(exte
     allowed=execute(worker,tab_id,'submitAll')
     assert allowed['ok'],allowed
     assert page.evaluate('submissions')==1
+
+def test_a_planless_first_read_does_not_freeze_the_decision_snapshot_early(extension):
+    """Greptile PR #3 round 4: if the first read_check carries no parts, `seen`
+    must wait for the first read that does. Otherwise a checkbox revealed in
+    between is treated as undecided even though the model planned with it on
+    screen, and a valid hand-in is refused."""
+    page,worker,tab_id,_,origin=extension
+    page.goto(origin+'/multiselect.html')
+    worker.evaluate('(id)=>__assignmentHarness.injectAll(id)',tab_id)
+    worker.evaluate('(origin)=>__assignmentHarness.reset(origin)',origin)
+    read='''async ({id,parts})=>{const h=__assignmentHarness,p=await h.observeAllFrames(id);
+        const ref=s=>p.elements.find(e=>e.key.endsWith('#'+s))?.ref;
+        h.coverage.read({question:'Which of the following are current assets?',plan:'',
+          parts:parts?[{id:'a',what:'Cash',answer:'Cash',ref:ref('cash')},{id:'b',what:'Accounts Receivable',answer:'Accounts Receivable',ref:ref('ar')}]:[]},p);
+        return h.coverage.current.seen?h.coverage.current.seen.size:null;}'''
+    assert worker.evaluate(read,{'id':tab_id,'parts':False}) is None,'a plan-less read decides nothing'
+    page.evaluate('revealAnother()')            # Inventory appears before any plan exists
+    assert worker.evaluate(read,{'id':tab_id,'parts':True}) is not None,'the first real plan takes the snapshot'
+    assert worker.evaluate('__assignmentHarness.coverage.questions.size')==1
+    assert execute(worker,tab_id,'cash',part_id='a')['ok']
+    assert execute(worker,tab_id,'ar',part_id='b')['ok']
+    # Inventory was on screen when the plan was made, so leaving it unticked is the answer
+    allowed=execute(worker,tab_id,'submitAll')
+    assert allowed['ok'],allowed
+    assert page.evaluate('submissions')==1

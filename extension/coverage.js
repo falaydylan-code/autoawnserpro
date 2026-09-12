@@ -30,7 +30,9 @@
       // so it must not quietly count a newly revealed checkbox as "decided".
       // A control that appears after planning is covered only by an explicit
       // part naming it; otherwise hand-in refuses by name and the student decides.
-      if (fresh) { q.seen = new Set(); for (const e of page.elements) q.seen.add(e.key); }
+      // "First made" means the first read that carries parts (or the first
+      // adopted answer) -- a plan-less read has decided nothing yet.
+      if (!q.seen && action.parts?.length) q.seen = new Set(page.elements.map(e => e.key));
       if (action.plan && !q.plan) q.plan = action.plan;
       for (const incoming of action.parts || []) {
         const target = page.elements.find(e => e.ref === incoming.ref && answerTarget(e));
@@ -93,6 +95,7 @@
         entered:false,verified:false,target_key:target.key,evidence:null,adopted:true};
       if(source){part.source_key=source.key;part.source_label=source.name;}
       q.parts.set(part.id,part);
+      if(!q.seen) q.seen=new Set(page.elements.map(e=>e.key));   // the adopted answer is the plan
       return {part,target};
     }
     record(action,page,outcome) {
