@@ -74,6 +74,12 @@ in code, and the prompt only explains why.
 - `frontend/` and `adapters.py` are the older selector-driven path, kept as a
   fallback. They are not on the extension's code path.
 
+## Reference reading
+
+`CONTEXT_BROWSER_USE.md` compares this loop against browser-use, the most mature
+open-source version of the same idea, and lists what is worth taking from it.
+Context only — none of it is implemented.
+
 ## Running it
 
     pip install -r requirements.txt
