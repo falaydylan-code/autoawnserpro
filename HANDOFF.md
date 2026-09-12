@@ -5,6 +5,33 @@ Newest first. Both agents append here before finishing a session. Four lines:
 
 ---
 
+## 2026-09-11 — claude — plan review loop between Claude and Codex
+
+**Did:** Built `planloop/`. Claude drafts a plan, `codex exec` reviews it against
+the real code and edits `PLAN.md` directly, returning a schema-forced verdict.
+Up to three rounds, on Dylan's request only. Deadlock writes OPEN DISAGREEMENT
+and stops for him rather than either side winning.
+
+**Verified:** Ran it for real against a plan deliberately proposing the provider
+key be moved into the extension. Codex returned changes_needed and rewrote the
+plan to keep the key server-side, restore code-level action validation, fail
+loudly on a missing screenshot rather than running blind, and reject truncated
+replies. 69 tests pass.
+
+**Left undone:** Claude's half of a round is manual — it reads the diff and
+verdict and writes its reply into LOG.md. Not scriptable, since Claude is not a
+subprocess.
+
+**Watch out:** Two things bit during the build. Windows encoded the prompt as
+cp1252 and Codex rejected it, so stdin is now forced to UTF-8. And the boundary
+guard initially compared against the whole working tree rather than a baseline
+taken before the round, so it flagged Claude's own in-progress files; it now
+only considers what changed during the round. `git checkout --` is a no-op on
+untracked files, so nothing was lost, but a stricter guard would have deleted
+work.
+
+---
+
 ## 2026-09-11 — claude — set up the shared working agreement
 
 **Did:** Added `AGENTS.md` (+ `CLAUDE.md` importing it) and this log, so Codex

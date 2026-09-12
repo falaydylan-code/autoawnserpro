@@ -42,6 +42,38 @@ from the diff.
 
 ---
 
+## The plan review loop
+
+Big changes get planned before they get built, and the plan gets a second
+reader. Claude drafts, Codex reviews and **edits the plan directly**, Claude
+answers. Up to three rounds. Nothing is built until both sides say ready.
+
+    python planloop/planloop.py new <slug> "Title"    # start a plan
+    python planloop/planloop.py review <slug>         # one Codex round
+    python planloop/planloop.py status <slug>         # where it stands
+
+Dylan triggers it, never the agents on their own:
+
+- **"plan this: ..."** — Claude writes `plans/<slug>/PLAN.md` and stops
+- **"review the plan"** — one round
+- **"keep reviewing"** — until both agree, or three rounds are spent
+
+Rules that make it mean something:
+
+- A reply that is not a clear `ready` / `changes_needed` is refused. A malformed
+  answer never counts as approval.
+- Codex may edit `plans/<slug>/PLAN.md` and nothing else. Anything it changes
+  elsewhere during a round is reverted; anything it creates elsewhere is moved
+  into `round-N/rejected/`. Work already uncommitted before the round is left
+  alone, because that is Claude mid-session.
+- Both sides must say ready. One side alone is half an answer.
+- Three rounds without agreement writes `OPEN DISAGREEMENT` into the plan,
+  marks it `BLOCKED — NEEDS DYLAN`, and exits non-zero. Neither agent breaks
+  the tie.
+- Rejecting a concern requires a reason. "Disagree" on its own does not count.
+
+Each round spends Dylan's Codex quota, which is why it is on request only.
+
 ## What this project is
 
 A Chrome extension that reads the assignment page a student already has open,
