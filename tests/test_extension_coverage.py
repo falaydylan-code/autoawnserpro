@@ -261,3 +261,33 @@ def test_multiselect_siblings_seen_at_plan_time_are_decided_but_a_new_checkbox_b
     assert refused['blocked'] and 'Inventory' in refused['detail'],refused
     assert 'Land' not in refused['detail'],'the seen siblings are still not named'
     assert page.evaluate('submissions')==1
+
+def test_a_re_read_does_not_launder_a_checkbox_that_appeared_after_planning(extension):
+    """Greptile PR #3 round 3: `seen` must not grow on later read_checks, or a
+    mechanical recheck would count a newly revealed checkbox as decided. It is
+    frozen at the first plan; a later box is covered only by a part naming it."""
+    page,worker,tab_id,_,origin=extension
+    page.goto(origin+'/multiselect.html')
+    worker.evaluate('(id)=>__assignmentHarness.injectAll(id)',tab_id)
+    worker.evaluate('(origin)=>__assignmentHarness.reset(origin)',origin)
+    plan_js='''async ({id,extra})=>{const h=__assignmentHarness,p=await h.observeAllFrames(id);
+        const ref=s=>p.elements.find(e=>e.key.endsWith('#'+s))?.ref;
+        const parts=[{id:'a',what:'Cash',answer:'Cash',ref:ref('cash')},{id:'b',what:'Accounts Receivable',answer:'Accounts Receivable',ref:ref('ar')}];
+        if(extra)parts.push({id:'c',what:'Inventory',answer:'Inventory',ref:ref('inventory')});
+        h.coverage.read({question:'Which of the following are current assets?',plan:'Cash, Accounts Receivable',parts},p);}'''
+    worker.evaluate(plan_js,{'id':tab_id,'extra':False})
+    assert execute(worker,tab_id,'cash',part_id='a')['ok']
+    assert execute(worker,tab_id,'ar',part_id='b')['ok']
+    page.evaluate('revealAnother()')
+    # the intervening re-read that echoes the same parts -- the path Greptile named
+    worker.evaluate(plan_js,{'id':tab_id,'extra':False})
+    assert worker.evaluate('__assignmentHarness.coverage.questions.size')==1,'same question, not a new one'
+    refused=execute(worker,tab_id,'submitAll')
+    assert refused['blocked'] and 'Inventory' in refused['detail'],refused
+    assert page.evaluate('submissions')==0
+    # only an explicit part for the new box, entered and verified, unblocks hand-in
+    worker.evaluate(plan_js,{'id':tab_id,'extra':True})
+    assert execute(worker,tab_id,'inventory',part_id='c')['ok']
+    allowed=execute(worker,tab_id,'submitAll')
+    assert allowed['ok'],allowed
+    assert page.evaluate('submissions')==1

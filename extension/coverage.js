@@ -21,13 +21,16 @@
       // A changed Part tab is not a new question. Keep the ledger while any
       // previously seen tabs still occur, even if the model rephrases the stem.
       if (this.current && page.part_tabs?.some(t => this.current.tabs.has(t.key))) fresh = false;
-      let q = fresh ? {id, text:action.question, plan:action.plan || '', parts:new Map(), tabs:new Map(), seen:new Set(), steps:0, submitted:false} :
+      let q = fresh ? {id, text:action.question, plan:action.plan || '', parts:new Map(), tabs:new Map(), steps:0, submitted:false} :
         (this.questions.get(id) || this.current);
       if (fresh) this.questions.set(id, q);
       this.current = q;
-      // Every control on screen while the plan was being made. Deciding to leave
-      // a checkbox unticked only counts as a decision if the model could see it.
-      q.seen ||= new Set(); for (const e of page.elements) q.seen.add(e.key);
+      // Every control on screen when the plan was FIRST made, and never widened:
+      // a later re-read may be a mechanical recheck that echoes the old parts,
+      // so it must not quietly count a newly revealed checkbox as "decided".
+      // A control that appears after planning is covered only by an explicit
+      // part naming it; otherwise hand-in refuses by name and the student decides.
+      if (fresh) { q.seen = new Set(); for (const e of page.elements) q.seen.add(e.key); }
       if (action.plan && !q.plan) q.plan = action.plan;
       for (const incoming of action.parts || []) {
         const target = page.elements.find(e => e.ref === incoming.ref && answerTarget(e));
