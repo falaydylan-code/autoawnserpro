@@ -73,6 +73,7 @@
   }
   function role(el) {
     if(el.getAttribute('role')) return el.getAttribute('role');
+    if(el.localName.includes('-')&&!el.shadowRoot) return 'widget';
     if(editable(el)) return 'textbox';
     if(el.tagName==='INPUT') return el.type;
     if(el.tagName==='A') return 'link';
@@ -165,7 +166,8 @@
     hideUI();refs=new Map();
     const nodes=all(), warnings=[];
     if(nodes.some(n=>n.localName.includes('-')&&!n.shadowRoot)) warnings.push('Some custom elements expose no open shadow root; closed shadow contents cannot be inspected or reliably detected. Use the screenshot; pause if required controls are missing.');
-    const interactive=nodes.filter(n=>n.matches(INTERACTIVE)&&visible(n)&&!sensitive(n)&&(!n.hasAttribute('contenteditable')||n.isContentEditable||n.matches('input,textarea,button,select,[role]')));
+    const opaque=n=>n.localName.includes('-')&&!n.shadowRoot&&!n.matches(INTERACTIVE)&&!n.querySelector(INTERACTIVE);
+    const interactive=nodes.filter(n=>((n.matches(INTERACTIVE)&&(!n.hasAttribute('contenteditable')||n.isContentEditable||n.matches('input,textarea,button,select,[role]')))||opaque(n))&&visible(n)&&!sensitive(n));
     const selected=new Set(interactive);
     for(const el of interactive) for(let n=parent(el);n;n=parent(n)) if(n.matches(GROUPS))selected.add(n);
     const ordered=nodes.filter(n=>selected.has(n));
@@ -180,7 +182,7 @@
       const menuOwner=ownerId?chosen.find(n=>n.id===ownerId):chosen.find(n=>n!==el&&n.matches(DROPDOWNS)&&clean(n.getAttribute('aria-label'))===clean(el.getAttribute('aria-label'))&&clean(el.getAttribute('aria-label')));
       return {ref,key:k,group:local.get(group)||null,depth:Math.min(depth,20),role:role(el),
         name:accessibleName(el).slice(0,400),...blankContext(el),...tableContext(el),
-        dropdown:el.matches(DROPDOWNS),
+        dropdown:el.matches(DROPDOWNS),opaque:opaque(el),
         owner_ref:local.get(menuOwner)||null,
         list_ref:local.get(closest(parent(el),LISTS))||null,
         order_index:closest(parent(el),LISTS)?listItems(closest(parent(el),LISTS)).indexOf(el):null,
@@ -455,7 +457,10 @@
     if(!el || !visible(el))return {visible:false,verified:false};
     if(sensitive(el))return {visible:true,verified:false};
     const expected=clean(evidence.answer).toLowerCase();
-    let actual=valueOf(el),verified=false;
+    // `supported` means a branch below actually judged this control. Only a
+    // control nothing here can read -- a closed shadow host, a canvas -- is
+    // unsupported, and for those the screenshot verdict stands instead.
+    let actual=valueOf(el),verified=false,supported=true;
     if(evidence.kind==='ordering') {
       const items=listItems(el);const actualKeys=items.map(key);
       verified=!!evidence.order_keys?.length && JSON.stringify(actualKeys)===JSON.stringify(evidence.order_keys);
@@ -475,7 +480,8 @@
     }
     else if(el.tagName==='SELECT'){const option=el.selectedOptions[0];verified=!!option&&(clean(option.text).toLowerCase()===expected||clean(option.value).toLowerCase()===expected);}
     else if(editable(el))verified=clean(actual).toLowerCase()===expected;
-    return {visible:true,verified,supported:el.matches(DROPDOWNS)||editable(el)||el.tagName==='SELECT'||['radio','checkbox','option','switch'].includes(role(el)),actual:clean(actual).slice(0,1000)};
+    else supported=false;
+    return {visible:true,verified,supported,actual:clean(actual).slice(0,1000)};
   }
   function visualGuard(point) {
     let doc=document,x=point.x,y=point.y,el;

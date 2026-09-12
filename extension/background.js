@@ -66,7 +66,13 @@ async function refreshEvidence(tabId,page){
     if(part.kind==='ordering'){evidence.kind='ordering';evidence.order_keys=(part.order_keys||[]).map(k=>k.slice(k.indexOf(':')+1));}
     if(part.source_key)evidence.source_key=part.source_key.slice(part.source_key.indexOf(':')+1);
     const observed=await chrome.tabs.sendMessage(tabId,{type:'verify',evidence},{frameId:mapped.frameId});
-    if(observed.visible){part.domEvidence=observed;part.verified=observed.verified===true;if(part.verified)part.entered=true;}
+    if(observed.visible){
+      part.domEvidence=observed;
+      // The DOM decides only when it can actually read this control. For a
+      // closed shadow root it cannot, and letting its blind `false` overwrite a
+      // screenshot verdict un-verified a finished answer on every step.
+      if(observed.supported!==false){part.verified=observed.verified===true;if(part.verified)part.entered=true;}
+    }
   }
   state.progress=coverage.summary();
 }
@@ -102,10 +108,11 @@ async function currentSnapshot(tabId,snap,page){
 async function browserInput(tabId,start,end){
   for(const point of [start,end].filter(Boolean)){
     const v=await chrome.tabs.sendMessage(tabId,{type:'viewport'},{frameId:0});
-    if(point.x<0||point.y<0||point.x>=v.width||point.y>=v.height)throw new Error('Target is outside the viewport. Scroll and observe again.');
-    const guard=await chrome.tabs.sendMessage(tabId,{type:'visual_guard',point},{frameId:0});if(!guard.ok)throw new Error(guard.detail);
+    if(point.x<0||point.y<0||point.x>=v.width||point.y>=v.height)return {ok:false,detail:'Target is outside the viewport. Scroll and observe again.'};
+    // A refused point is the model's aim to correct, not the run's end.
+    const guard=await chrome.tabs.sendMessage(tabId,{type:'visual_guard',point},{frameId:0});if(!guard.ok)return {ok:false,detail:guard.detail+' Look at the screenshot again and aim at the answer control itself.'};
   }
-  return AssignmentVisual.input(tabId,start,end);
+  return AssignmentVisual.input(tabId,start,end,()=>state.stopRequested);
 }
 async function verifyVisual(tabId,page,part,config){
   const snap=await makeSnapshot(tabId,page);
@@ -125,12 +132,45 @@ async function verifyVisual(tabId,page,part,config){
   return matches;
 }
 function answering(action,page){const e=page.elements.find(e=>e.ref===action.ref);return ['fill','select','drag'].includes(action.action)||(action.action==='click'&&(['radio','checkbox','option','switch'].includes(e?.role)||(e?.role==='button'&&e?.choice)));}
+// The model said `select` but pointed at a custom menu, not a <select>. The
+// intent is unambiguous -- pick this option -- so treat it as the click it is
+// rather than refusing over the verb. If it named the cell and the option text,
+// find that option in the open menu. Only ever resolves to a visible option.
+function normaliseCustomSelect(action,page){
+  if(action.action!=='select')return action;
+  const target=page.elements.find(e=>e.ref===action.ref);
+  if(target?.role==='option')return {...action,action:'click',purpose:'answer',option:undefined};
+  if(target?.dropdown&&action.option){
+    const option=page.elements.find(e=>e.role==='option'&&e.owner_ref===target.ref&&norm(e.name)===norm(action.option));
+    if(option)return {...action,action:'click',ref:option.ref,purpose:'answer',option:undefined};
+  }
+  return action;
+}
 async function executeAction(tabId,action,page,config){
   await refreshEvidence(tabId,page);
-  const part=coverage.current?.parts.get(action.part_id),selected=page.elements.find(e=>e.ref===action.ref);
+  action=normaliseCustomSelect(action,page);
+  const selected=page.elements.find(e=>e.ref===action.ref);
+  // The plan already bound every dropdown cell to a part at read time, and an
+  // open menu belongs to exactly one cell. So a cell click or option click that
+  // forgot part_id is not ambiguous; resolve it from the plan rather than
+  // letting it fall through to the plain click path, where the menu opens
+  // unregistered and every option is then refused as unbound.
+  let part=coverage.current?.parts.get(action.part_id);
+  if(!part&&selected&&coverage.current){
+    const parts=[...coverage.current.parts.values()];
+    if(selected.dropdown||selected.opaque)part=parts.find(p=>p.target_key===selected.key)||(selected.opaque&&parts.length===1&&!parts[0].target_key?parts[0]:undefined);
+    else if(selected.role==='option'){
+      const ownerKey=page.elements.find(e=>e.ref===selected.owner_ref)?.key;
+      part=(pendingMenu&&coverage.current.parts.get(pendingMenu.part))||parts.find(p=>p.target_key&&p.target_key===ownerKey);
+    }
+    if(part)action={...action,part_id:part.id};
+  }
   if(action.action==='reorder'){
     const anchor=page.elements.find(e=>e.ref===action.to);
-    if(part?.kind!=='ordering'||!part.order_keys?.includes(selected?.key)||!part.order_keys.includes(anchor?.key)||selected.key===anchor.key||selected.list_ref!==anchor.list_ref||!selected.list_ref||!selected.box||!anchor.box)return {ok:false,detail:'Reorder needs two distinct planned items in the same list.'};
+    if(!part)return {ok:false,detail:'Reorder needs part_id of the ordering part.'};
+    if(part.kind!=='ordering'||!part.order_keys?.length)return {ok:false,detail:`Part "${part.id}" is not an ordering plan. Re-read with order:[item refs in the desired order] for the list.`};
+    if(!part.order_keys.includes(selected?.key)||!part.order_keys.includes(anchor?.key))return {ok:false,detail:'Both refs must be items named in the ordering plan; refs change every observation, so use the current ones.'};
+    if(selected.key===anchor.key||selected.list_ref!==anchor.list_ref||!selected.list_ref||!selected.box||!anchor.box)return {ok:false,detail:'Reorder needs two distinct items in the same visible list.'};
     const s=selected.box,t=anchor.box,start={x:s.x+s.w/2,y:s.y+s.h/2},end={x:t.x+t.w/2,y:t.y+(action.placement==='before'?2:t.h-2)};
     if(!['before','after'].includes(action.placement))return {ok:false,detail:'Specify before or after.'};
     part.verified=false;return browserInput(tabId,start,end);
@@ -143,13 +183,40 @@ async function executeAction(tabId,action,page,config){
     part.visual=true;if(action.purpose!=='open')part.verified=false;
     return browserInput(tabId,{x:p.x*v.width,y:p.y*v.height},d?{x:d.x*v.width,y:d.y*v.height}:null);
   }
+  if(action.action==='click' && selected?.opaque){
+    // The page draws this box but we cannot see inside it (closed shadow root).
+    // el.click() on the host reaches nothing; a real mouse click at its centre
+    // does. Nothing the DOM can read back, so this part is verified visually.
+    if(!part)return {ok:false,detail:'Clicking a widget needs part_id of the part it answers.'};
+    if(!selected.box)return {ok:false,detail:'That widget has no measurable position.'};
+    if(part.target_key&&part.target_key!==selected.key)return {ok:false,detail:'Widget does not match the planned part.'};
+    // A screenshot already confirmed this part. Clicking the widget again would
+    // reopen it and throw that evidence away, which is how a finished answer
+    // became unfinished in a live run.
+    if(part.verified)return {ok:false,detail:`"${part.what}" is already verified from the screenshot. Do not click it again; move to the next part or the control that continues.`};
+    part.target_key=selected.key;part.visual=true;
+    // The first click on a widget opens it; whatever the model calls the next
+    // one, it is acting inside the open widget and the result needs checking.
+    // Relying on the model's purpose label left a chosen answer unverified.
+    const opening=!part.opened&&action.purpose!=='answer';
+    const b=selected.box,out=await browserInput(tabId,{x:b.x+b.w/2,y:b.y+b.h/2});
+    if(out.ok){if(opening){part.opened=true;out.preparation=true;}else{part.entered=true;part.verified=false;part.opened=false;out.needsVerification=true;out.partId=part.id;}}
+    return out;
+  }
   if(action.action==='click' && part && (selected?.dropdown||action.purpose==='open'||(pendingMenu?.part===part.id&&selected?.role==='option'))){
     if(selected?.control||!selected?.box)return {ok:false,detail:'Dropdown action requires a visible non-navigation control.'};
     const mapped=refMap.get(selected.ref);
     if(selected.dropdown){
       if(part.target_key&&part.target_key!==selected.key)return {ok:false,detail:'Dropdown does not match the planned cell.'};
       part.target_key=selected.key;pendingMenu={part:part.id,frame:mapped.frameId};
-    }else if(pendingMenu?.part!==part.id||pendingMenu.frame!==mapped.frameId||page.elements.find(e=>e.ref===selected.owner_ref)?.key!==part.target_key)return {ok:false,detail:'Open the planned dropdown first; the menu control must belong to that cell.'};
+    }else{
+      // The option must belong to the planned cell's menu. If the worker saw
+      // the menu open it also checks it was this part's; a menu it did not see
+      // open (the cell was clicked through the plain path) is still acceptable
+      // when the option's owner cell is provably the planned one.
+      const ownerKey=page.elements.find(e=>e.ref===selected.owner_ref)?.key;
+      if(ownerKey!==part.target_key||(pendingMenu&&(pendingMenu.part!==part.id||pendingMenu.frame!==mapped.frameId)))return {ok:false,detail:'Open the planned dropdown first; the menu control must belong to that cell.'};
+    }
     if(selected.role==='option'&&norm(selected.name)!==norm(part.answer))return {ok:false,detail:'Option differs from the planned answer.'};
     const b=selected.box,out=await browserInput(tabId,{x:b.x+b.w/2,y:b.y+b.h/2});
     if(selected.role==='option'){part.entered=true;part.verified=false;pendingMenu=null;out.needsVerification=true;out.partId=part.id;}
@@ -220,7 +287,7 @@ async function run(tabId){
   Object.assign(state,{running:true,stopRequested:false,tabId,steps:0,questions:0,cost:0,progress:'',log:[]});
   coverage=new AssignmentCoverage.Coverage();decisionAbort=new AbortController();runToken='';
   decisionSnapshot=null;pendingMenu=null;visualFailures.clear();
-  let checked=false,recheck=false,stalls=0,navSteps=0,lastAction={},lastDigest='',sinceRead=0,askedForParts=false,shifted=0;
+  let checked=false,recheck=false,stalls=0,navSteps=0,lastAction={},lastDigest='',sinceRead=0,askedForParts=false,shifted=0,doneRefused=false;
   try{
     const tab=await chrome.tabs.get(tabId);runOrigin=new URL(tab.url).origin;runUrl=tab.url;runTitle=tab.title;
     await compatible(await settings());
@@ -238,7 +305,20 @@ async function run(tabId){
         step:(coverage.current?.steps||0)+1,step_budget:coverage.budget(),page_changed:changed,last_action:lastAction,
         task_note:config.note,plan:coverage.current?.plan||'',progress:coverage.summary(),ledger:coverage.ledger(),warnings:page.warnings,
         phase:!checked||recheck?'read_check':navSteps?'navigate':'act',advance:config.advance,auto_submit:config.auto_submit,model:config.model};
-      state.steps++;const result=await decide(config,observation),action=result.action;state.cost+=result.cost||0;
+      state.steps++;let result;
+      try{result=await decide(config,observation);}
+      catch(e){
+        // A reply the backend could not turn into an action is the model's slip,
+        // not the run's end: the backend already asked once for a correction and
+        // billed both calls. Spend one stall and look again. Anything else -- a
+        // missing key, a bad model, an unreachable backend -- stops here.
+        if(/Nothing was done|invalid action format|Invalid proposal|not an allowed action|would not (?:choose|perform)|Verification may only be returned/.test(e.message)){
+          stalls++;recheck=false;lastAction={action:'invalid',ok:false,detail:e.message.replace(/^The backend refused this step \(HTTP \d+\): /,'')};
+          emit({kind:'warn',message:'The model answered in a form the harness could not use. Asking again.',detail:lastAction.detail});continue;
+        }
+        throw e;
+      }
+      const action=result.action;state.cost+=result.cost||0;
       emit({kind:'think',message:`step ${state.steps} · ${observation.phase} · ${action.action}`,detail:action.reason||'',working:result.working||'',raw:result.raw||'',cost:result.cost,tokens:`${result.input_tokens||0} in / ${result.output_tokens||0} out`});
       if(state.stopRequested)break;
       const latest=await chrome.tabs.get(tabId);
@@ -273,6 +353,15 @@ async function run(tabId){
       }
       if(action.action==='done'||action.action==='give_up'){
         const remaining=coverage.outstanding();
+        // The model's word that it is finished is not evidence. The first time
+        // it says done with parts still unverified, tell it exactly which and
+        // let it look again; a plan one click from finished was being thrown
+        // away here. give_up, or a second done, stops for real.
+        if(remaining.length&&action.action==='done'&&!doneRefused){
+          doneRefused=true;stalls++;
+          lastAction={action:'done',ok:false,detail:'Refused: these parts are not verified yet: '+remaining.join(', ')+'. A value showing inside an open widget is not chosen until you click it.'};
+          emit({kind:'warn',message:'Model said done with parts outstanding. Asking it to finish them.',detail:remaining.join(', ')});continue;
+        }
         emit({kind:remaining.length?'warn':'stop',message:(remaining.length?'Stopped with outstanding parts: '+remaining.join(', '):'Finished: ')+(action.reason||'')});break;
       }
       if(coverage.current&&++coverage.current.steps>coverage.budget())throw new Error('Question action budget reached. Completed parts were retained; inspect the remaining parts.');
@@ -284,10 +373,16 @@ async function run(tabId){
       if(outcome.blocked)break;
       let landed=false;if(outcome.ok)landed=await waitForEffect(tabId,page.digest);
       const updated=await observeAllFrames(tabId);await refreshEvidence(tabId,updated);
-      const actedPart=coverage.current?.parts.get(action.part_id);
-      if(outcome.ok&&actedPart&&(outcome.needsVerification||action.action.startsWith('visual_'))&&action.purpose!=='open')await verifyVisual(tabId,updated,actedPart,config);
+      const actedPart=coverage.current?.parts.get(outcome.partId||action.part_id);
+      // A screenshot verification is a paid model call. Spend it only when the
+      // page gives the DOM nothing to read back (closed shadow root, canvas);
+      // a cell whose value the content script can read has already been judged
+      // by refreshEvidence above, and a second opinion from a picture adds cost
+      // without adding evidence.
+      const domDecided=actedPart?.domEvidence?.supported===true;
+      if(outcome.ok&&actedPart&&(outcome.needsVerification||action.action.startsWith('visual_'))&&action.purpose!=='open'&&!domDecided)await verifyVisual(tabId,updated,actedPart,config);
       if(outcome.ok&&actedPart?.kind==='ordering'&&!actedPart.order_keys?.length)await verifyVisual(tabId,updated,actedPart,config);
-      const progress=before!==coverage.summary();stalls=progress?0:outcome.preparation&&landed?stalls:stalls+1;
+      const progress=before!==coverage.summary();stalls=progress?0:outcome.preparation&&landed?stalls:stalls+1;if(progress)doneRefused=false;
       state.progress=coverage.summary();emit({kind:'progress',message:state.progress});
       lastAction={action:action.action,ref:action.ref,ok:outcome.ok,detail:outcome.detail,landed};
       const control=page.elements.find(e=>e.ref===action.ref)?.control;

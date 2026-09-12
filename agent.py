@@ -249,8 +249,12 @@ For custom dropdowns, first click the trigger with purpose:"open" and part_id.
 Opening a menu is preparation, not an answer. On the NEXT observation select an
 option with purpose:"answer", part_id and its fresh ref; the original cell is
 the verification target. Do not use native select on a custom dropdown.
-If a required control is visible but has no ref, do not conclude it is a closed
-shadow root. Use visual_click with point:{x:0..1,y:0..1}, part_id, purpose:"open"
+An entry with role widget is a box the page draws that the index cannot see
+into. Click it by ref like any control -- purpose:"open" first if it is a menu,
+then purpose:"answer" -- and the harness drives real mouse input and checks the
+result from a fresh screenshot. Prefer that to guessing coordinates.
+If a required control is visible but has no ref at all, do not conclude it is a
+closed shadow root. Use visual_click with point:{x:0..1,y:0..1}, part_id, purpose:"open"
 or "answer", observation_id from this screenshot. Coordinates are fractions of
 the entire supplied screenshot, not a cropped image. visual_drag also needs a
 destination:{x,y} and purpose:"answer". Only target the question answer area or
@@ -369,6 +373,10 @@ def parse_action(raw, finish_reason=''):
     if action.action == 'verify' and (not action.part_id or not action.observation_id or not action.status):
         raise ValueError('Verification needs part_id, observation_id and status.')
     for part in action.parts:
+        # `order` is only ever sent for an ordering plan; a model that supplies it
+        # but forgets kind:"ordering" has still told us what the part is.
+        if part.kind != 'ordering' and part.order:
+            part.kind = 'ordering'
         if part.kind == 'ordering' and (len(part.sequence) < 2 or (part.order and (len(part.order) != len(part.sequence) or len(set(part.order)) != len(part.order)))):
             raise ValueError('Ordering needs a sequence of labels and, when available, distinct item refs in that same desired order.')
     if len({p.id for p in action.parts}) != len(action.parts):
@@ -555,14 +563,15 @@ async def decide(owner, observation, model, record=None, require=''):
                               finish_reason=finish_reason)
                 try:
                     action = parse_action(raw, finish_reason)
+                    if action.action == 'verify' and require != 'verify':
+                        raise ValueError('Verification may only be returned during the verification phase. '
+                                         'Return an action that changes the page, or done.')
                 except ValueError as exc:
                     if attempt == 0 and cost is not None:
                         body['messages'].extend([{'role': 'assistant', 'content': raw},
                             {'role': 'user', 'content': 'Invalid proposal: ' + str(exc) + ' Correct the action once using the current observation. No action has executed.'}])
                         continue
                     raise
-                if action.action == 'verify' and require != 'verify':
-                    raise ValueError('Verification may only be returned during the verification phase.')
                 wrong_verb = (
                     (require == 'act' and action.action == 'read_check')
                     or (require not in ('', 'act') and action.action != require)
