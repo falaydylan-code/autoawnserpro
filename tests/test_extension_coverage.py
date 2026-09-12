@@ -316,3 +316,25 @@ def test_a_planless_first_read_does_not_freeze_the_decision_snapshot_early(exten
     allowed=execute(worker,tab_id,'submitAll')
     assert allowed['ok'],allowed
     assert page.evaluate('submissions')==1
+
+def test_a_plan_whose_refs_bind_to_nothing_does_not_freeze_the_snapshot(extension):
+    """Greptile PR #3 round 5: a parts list with stale or invented refs binds no
+    target, so it has planned nothing and must not take the decision snapshot."""
+    page,worker,tab_id,_,origin=extension
+    page.goto(origin+'/multiselect.html')
+    worker.evaluate('(id)=>__assignmentHarness.injectAll(id)',tab_id)
+    worker.evaluate('(origin)=>__assignmentHarness.reset(origin)',origin)
+    read='''async ({id,real})=>{const h=__assignmentHarness,p=await h.observeAllFrames(id);
+        const ref=s=>p.elements.find(e=>e.key.endsWith('#'+s))?.ref;
+        const parts=real?[{id:'a',what:'Cash',answer:'Cash',ref:ref('cash')},{id:'b',what:'Accounts Receivable',answer:'Accounts Receivable',ref:ref('ar')}]
+                        :[{id:'a',what:'Cash',answer:'Cash',ref:9999},{id:'b',what:'Accounts Receivable',answer:'Accounts Receivable',ref:9998}];
+        h.coverage.read({question:'Which of the following are current assets?',plan:'',parts},p);
+        return h.coverage.current.seen?h.coverage.current.seen.size:null;}'''
+    assert worker.evaluate(read,{'id':tab_id,'real':False}) is None,'invented refs bind nothing, so nothing is decided'
+    page.evaluate('revealAnother()')
+    assert worker.evaluate(read,{'id':tab_id,'real':True}) is not None,'the first plan that binds takes the snapshot'
+    assert execute(worker,tab_id,'cash',part_id='a')['ok']
+    assert execute(worker,tab_id,'ar',part_id='b')['ok']
+    allowed=execute(worker,tab_id,'submitAll')
+    assert allowed['ok'],allowed
+    assert page.evaluate('submissions')==1
