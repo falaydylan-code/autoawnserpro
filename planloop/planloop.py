@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import hashlib
 import json
 import os
 import shutil
@@ -69,6 +70,34 @@ def changed_files() -> set[str]:
     """Paths git currently reports as modified, added or deleted."""
     lines = git("status", "--porcelain").splitlines()
     return {line[3:].strip().strip('"') for line in lines if line[3:].strip()}
+
+
+def file_hash(path: Path) -> str | None:
+    """Content hash of a working-tree file, or None if it is not a file."""
+    if not path.is_file():
+        return None
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def snapshot_dirty(round_dir: Path) -> dict[str, str | None]:
+    """Record what was already uncommitted before Codex starts, by content.
+
+    A path-only baseline has a hole: a file Claude was mid-edit on that Codex
+    then also edits appears in both the before and after sets and slips through
+    untouched, overwriting Claude's work. So the baseline carries a content hash
+    per dirty file, and a copy of each one under `round_dir/baseline/`, so that
+    a co-edited file can be put back exactly as Claude left it.
+    """
+    state: dict[str, str | None] = {}
+    for path in changed_files():
+        target = REPO / path
+        digest = file_hash(target)
+        state[path] = digest
+        if digest is not None and round_dir is not None:
+            copy = round_dir / "baseline" / path.replace("\\", "/").replace("/", "__")
+            copy.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(target, copy)
+    return state
 
 
 def plan_dir(slug: str) -> Path:
@@ -154,7 +183,7 @@ def cmd_review(slug: str) -> None:
     before = round_dir / "before.md"
     shutil.copy2(plan, before)
 
-    baseline = changed_files()
+    baseline = snapshot_dirty(round_dir)
     prompt = build_prompt(slug, number)
     (round_dir / "prompt.md").write_text(prompt, encoding="utf-8")
 
@@ -234,7 +263,7 @@ def build_prompt(slug: str, number: int) -> str:
     return "".join(parts)
 
 
-def enforce_boundary(slug: str, baseline: set[str] | None = None,
+def enforce_boundary(slug: str, baseline: set[str] | dict[str, str | None] | None = None,
                      round_dir: Path | None = None,
                      allowed: list[str] | None = None) -> list[str]:
     """Codex stays inside what it was given. Everything else is put back.
@@ -246,14 +275,21 @@ def enforce_boundary(slug: str, baseline: set[str] | None = None,
 
     Only files that changed *during* the round or task count. Whatever was
     already uncommitted belongs to Claude and is left alone -- reverting that
-    would destroy work in progress.
+    would destroy work in progress. "Already uncommitted" is judged by content,
+    not by path: a dirty file whose hash moved during the round was co-edited
+    by Codex, and is restored from the snapshot `snapshot_dirty` took.
 
     A tracked file is reverted. A file Codex newly created outside its bounds is
     moved into `rejected/` rather than deleted, so nothing is silently thrown
-    away.
+    away. Codex's version of a co-edited file goes to `rejected/` too.
     """
     permitted = [p.replace("\\", "/") for p in (allowed or [f"plans/{slug}/"])]
-    baseline = baseline or set()
+    if isinstance(baseline, set):
+        # Path-only baseline from an older caller: cannot tell an untouched dirty
+        # file from a co-edited one, so it keeps the old leave-alone behaviour.
+        before: dict[str, str | None] = {p: None for p in baseline}
+    else:
+        before = dict(baseline or {})
 
     def inside(path: str) -> bool:
         """A permitted entry ending in `/` is a folder; anything else is one file."""
@@ -266,16 +302,44 @@ def enforce_boundary(slug: str, baseline: set[str] | None = None,
                 return True
         return False
 
-    strays = sorted(path for path in changed_files() - baseline if not inside(path))
+    def mangled(path: str) -> str:
+        return path.replace("\\", "/").replace("/", "__")
+
+    strays: list[str] = []
+    co_edited: list[str] = []
+    for path in sorted(changed_files()):
+        if inside(path):
+            continue
+        if path in before:
+            if before[path] is None or before[path] == file_hash(REPO / path):
+                continue                     # Claude's file, untouched by Codex
+            co_edited.append(path)
+        strays.append(path)
+
     for path in strays:
         target = REPO / path
+        if path in co_edited:
+            # Keep Codex's version for inspection, then put Claude's back.
+            snapshot = round_dir / "baseline" / mangled(path) if round_dir else None
+            if round_dir and target.is_file():
+                quarantine = round_dir / "rejected" / mangled(path)
+                quarantine.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(target, quarantine)
+            if snapshot and snapshot.is_file():
+                shutil.copy2(snapshot, target)
+            else:
+                print(f"\n  WARNING: {path} was edited by both Claude and Codex and no "
+                      "snapshot of Claude's version exists. Codex's version was kept. "
+                      "Compare it against your own changes before continuing.\n",
+                      file=sys.stderr)
+            continue
         tracked = subprocess.run(
             ["git", "ls-files", "--error-unmatch", path],
             cwd=REPO, capture_output=True).returncode == 0
         if tracked:
             subprocess.run(["git", "checkout", "--", path], cwd=REPO, capture_output=True)
         elif round_dir and target.exists() and target.is_file():
-            quarantine = round_dir / "rejected" / path.replace("\\", "/").replace("/", "__")
+            quarantine = round_dir / "rejected" / mangled(path)
             quarantine.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(target), str(quarantine))
     return strays

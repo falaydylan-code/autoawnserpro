@@ -10,6 +10,10 @@
 <button type="button" id="check">Check</button>
 <button type="button" id="next">Next</button>
 <output id="feedback"></output></fieldset>
+<fieldset data-question-id="q8"><legend>Question 8. Enter the closing balance.</legend>
+  <label>Balance <input id="balance"></label>
+</fieldset>
+<button type="button" id="submitAll">Submit Assignment</button>
 <nav>
   <button type="button" id="signout">Sign out</button>
   <button type="button" id="reset">Reset progress</button>
@@ -27,6 +31,8 @@
     const picked = document.querySelector('.choice.selected');
     document.getElementById('feedback').textContent = picked && picked.id === 'optC' ? 'Your Answer: correct' : 'Your Answer: incorrect';
   };
+  window.submissions = 0;
+  document.getElementById('submitAll').onclick = () => { window.submissions++; };
   document.getElementById('signout').onclick = () => { document.body.dataset.signedOut = 'true'; };
   document.getElementById('reset').onclick = () => { document.body.dataset.reset = 'true'; };
 </script>

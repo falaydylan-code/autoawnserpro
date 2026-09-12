@@ -197,3 +197,49 @@ def test_work_already_in_progress_is_not_reverted(monkeypatch):
     strays = planloop.enforce_boundary("demo", baseline={"planloop/planloop.py"})
     assert strays == ["agent.py"], "only what changed during the round counts"
     assert "planloop/planloop.py" not in reverted
+
+
+def test_a_file_dirty_before_the_round_and_edited_during_it_is_restored(tmp_path, monkeypatch):
+    """Greptile PR #3: a path-only baseline let Codex overwrite a file Claude was
+    mid-edit on, because the path was in both the before and after sets. The
+    baseline now carries content hashes and a snapshot, so a co-edited file is
+    put back exactly as Claude left it and Codex's version is kept aside."""
+    monkeypatch.setattr(planloop, "REPO", tmp_path)
+    round_dir = tmp_path / "plans" / "demo" / "round-1"
+    round_dir.mkdir(parents=True)
+    claude_file = tmp_path / "agent.py"
+    claude_file.write_text("claude was here, unsaved\n", encoding="utf-8")
+
+    # before the round: agent.py is already dirty
+    monkeypatch.setattr(planloop, "changed_files", lambda: {"agent.py"})
+    baseline = planloop.snapshot_dirty(round_dir)
+    assert set(baseline) == {"agent.py"} and baseline["agent.py"] is not None
+    assert (round_dir / "baseline" / "agent.py").read_text(encoding="utf-8") == "claude was here, unsaved\n"
+
+    # during the round: Codex edits it as well
+    claude_file.write_text("codex overwrote this\n", encoding="utf-8")
+    monkeypatch.setattr(planloop.subprocess, "run",
+                        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, "", ""))
+
+    strays = planloop.enforce_boundary("demo", baseline=baseline, round_dir=round_dir)
+    assert strays == ["agent.py"], "a co-edited file counts as a stray"
+    assert claude_file.read_text(encoding="utf-8") == "claude was here, unsaved\n", "Claude's version is back"
+    assert (round_dir / "rejected" / "agent.py").read_text(encoding="utf-8") == "codex overwrote this\n", \
+        "Codex's version is kept for inspection, not thrown away"
+
+
+def test_a_dirty_file_codex_did_not_touch_is_still_left_alone(tmp_path, monkeypatch):
+    monkeypatch.setattr(planloop, "REPO", tmp_path)
+    round_dir = tmp_path / "plans" / "demo" / "round-1"
+    round_dir.mkdir(parents=True)
+    (tmp_path / "agent.py").write_text("claude mid-edit\n", encoding="utf-8")
+    monkeypatch.setattr(planloop, "changed_files", lambda: {"agent.py"})
+    baseline = planloop.snapshot_dirty(round_dir)
+    reverted = []
+    monkeypatch.setattr(
+        planloop.subprocess, "run",
+        lambda cmd, **kw: (reverted.append(cmd[-1]) if cmd[:3] == ["git", "checkout", "--"] else None)
+        or subprocess.CompletedProcess(cmd, 0, "", ""))
+    assert planloop.enforce_boundary("demo", baseline=baseline, round_dir=round_dir) == []
+    assert reverted == []
+    assert (tmp_path / "agent.py").read_text(encoding="utf-8") == "claude mid-edit\n"

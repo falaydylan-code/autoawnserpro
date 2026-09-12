@@ -207,3 +207,29 @@ def test_worker_refuses_destructive_and_offsite_controls_before_the_page_does(ex
         out=execute(worker,tab_id,target)
         assert not out['ok'] and 'Refused' in out['detail'],(target,out)
     assert page.evaluate('document.body.dataset.signedOut') is None
+
+def test_hand_in_accounts_for_every_answer_control_but_not_for_sibling_options(extension):
+    """Greptile PR #3: the gate only looked for unplanned text boxes, so a
+    visible unanswered radio or choice button would not stop a hand-in. The
+    fix must not swing the other way and treat the three options the student
+    did not pick as unanswered."""
+    page,worker,tab_id,_,origin=extension
+    mcq(worker,tab_id,page,origin)
+    worker.evaluate('''async (id)=>{const h=__assignmentHarness,p=await h.observeAllFrames(id);
+        const ref=p.elements.find(e=>e.key.endsWith('#optC')).ref;
+        h.coverage.read({question:'Which account increases when a customer pays in advance?',plan:'Deferred Revenue',
+          parts:[{id:'a',what:'the option',answer:'Deferred Revenue',ref}]},p);}''',tab_id)
+    assert execute(worker,tab_id,'optC',part_id='a')['ok']
+    refused=execute(worker,tab_id,'submitAll')
+    assert refused['blocked'],refused
+    # question 8's balance box is the unplanned control; optA/B/D must not be named
+    assert 'Balance' in refused['detail'] and 'Cash' not in refused['detail'] and 'Accounts Receivable' not in refused['detail'],refused
+    assert page.evaluate('submissions')==0
+    # plan and answer question 8, then hand-in is allowed
+    worker.evaluate('''async (id)=>{const h=__assignmentHarness,p=await h.observeAllFrames(id);
+        const ref=p.elements.find(e=>e.key.endsWith('#balance')).ref;
+        h.coverage.read({question:'Question 8. Enter the closing balance.',plan:'900',parts:[{id:'bal',what:'closing balance',answer:'900',ref}]},p);}''',tab_id)
+    assert execute(worker,tab_id,'balance','fill',text='900',part_id='bal')['ok']
+    allowed=execute(worker,tab_id,'submitAll')
+    assert allowed['ok'],allowed
+    assert page.evaluate('submissions')==1

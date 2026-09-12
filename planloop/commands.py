@@ -73,7 +73,7 @@ def cmd_run(driver, slug: str, task_id: str) -> None:
     work_dir = driver.plan_dir(slug) / "work" / wanted.lower()
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    baseline = driver.changed_files()
+    baseline = driver.snapshot_dirty(work_dir)
     plan_text = (driver.plan_dir(slug) / "PLAN.md").read_text(encoding="utf-8")
     prompt = build_task_prompt(task, plan_text)
     (work_dir / "prompt.md").write_text(prompt, encoding="utf-8")

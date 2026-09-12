@@ -123,8 +123,15 @@
         if(!config.auto_submit)return 'Hand-in is switched off.';
         const remaining=this.outstanding();
         if(remaining.length)return 'Cannot hand in; outstanding: '+remaining.join(', ');
+        // Every control the extension would treat as an answer has to be
+        // accounted for before hand-in, not only text boxes. One option in a
+        // radio group or a row of choice buttons covers its siblings: the three
+        // options the student did not pick are not unanswered questions.
         const bound=new Set([...this.questions.values()].flatMap(q=>[...q.parts.values()].map(p=>p.target_key)));
-        const unplanned=page.elements.filter(e=>!e.disabled && (e.role==='textbox'||e.role==='select'||e.drag==='target') && !bound.has(e.key));
+        const boundGroups=new Set(page.elements.filter(e=>bound.has(e.key)&&e.group!=null).map(e=>e.group));
+        const exclusive=e=>e.role==='radio'||e.role==='checkbox'||e.role==='option'||e.role==='switch'||(e.role==='button'&&e.choice);
+        const unplanned=page.elements.filter(e=>!e.disabled && answerTarget(e) && !bound.has(e.key)
+          && !(exclusive(e) && e.group!=null && boundGroups.has(e.group)));
         if(unplanned.length)return 'Cannot hand in; unplanned answer controls: '+unplanned.map(e=>e.name||e.blank||e.key).join(', ');
         if(page.warnings?.length)return 'Cannot hand in while observation limitations remain: '+page.warnings.join('; ');
         return '';
