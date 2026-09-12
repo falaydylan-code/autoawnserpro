@@ -1,0 +1,40 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "summary", "changes_made", "concerns", "questions"],
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": ["ready", "changes_needed"],
+      "description": "ready only if you would be comfortable building from this plan exactly as it now stands, after your edits."
+    },
+    "summary": {
+      "type": "string",
+      "description": "One paragraph: what this plan gets right, and what still worries you."
+    },
+    "changes_made": {
+      "type": "array",
+      "description": "Each edit you made to PLAN.md, in plain language.",
+      "items": { "type": "string" }
+    },
+    "concerns": {
+      "type": "array",
+      "description": "Problems you could not fix by editing, or that need Claude to decide.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["issue", "why_it_matters", "suggested_fix"],
+        "properties": {
+          "issue": { "type": "string" },
+          "why_it_matters": { "type": "string" },
+          "suggested_fix": { "type": "string" }
+        }
+      }
+    },
+    "questions": {
+      "type": "array",
+      "description": "Questions for Claude that the plan does not answer.",
+      "items": { "type": "string" }
+    }
+  }
+}
