@@ -233,3 +233,31 @@ def test_hand_in_accounts_for_every_answer_control_but_not_for_sibling_options(e
     allowed=execute(worker,tab_id,'submitAll')
     assert allowed['ok'],allowed
     assert page.evaluate('submissions')==1
+
+def test_multiselect_siblings_seen_at_plan_time_are_decided_but_a_new_checkbox_blocks_hand_in(extension):
+    """Greptile PR #3 round 2: checkboxes are independent, so 'one bound covers
+    the group' would let a required tick go missing. But blocking every unticked
+    sibling would make select-all-that-apply impossible to hand in. The line is
+    whether the model could see the box when it planned: an unticked box it saw
+    is a decision; one that appeared afterwards was never decided."""
+    page,worker,tab_id,_,origin=extension
+    page.goto(origin+'/multiselect.html')
+    worker.evaluate('(id)=>__assignmentHarness.injectAll(id)',tab_id)
+    worker.evaluate('(origin)=>__assignmentHarness.reset(origin)',origin)
+    worker.evaluate('''async (id)=>{const h=__assignmentHarness,p=await h.observeAllFrames(id);
+        const ref=s=>p.elements.find(e=>e.key.endsWith('#'+s)).ref;
+        h.coverage.read({question:'Which of the following are current assets?',plan:'Cash, Accounts Receivable',
+          parts:[{id:'a',what:'Cash',answer:'Cash',ref:ref('cash')},{id:'b',what:'Accounts Receivable',answer:'Accounts Receivable',ref:ref('ar')}]},p);}''',tab_id)
+    assert execute(worker,tab_id,'cash',part_id='a')['ok']
+    assert execute(worker,tab_id,'ar',part_id='b')['ok']
+    # Land and Bonds Payable were on screen when the plan was made: leaving them
+    # unticked is the answer, not an omission. Hand-in goes through.
+    allowed=execute(worker,tab_id,'submitAll')
+    assert allowed['ok'],allowed
+    assert page.evaluate('submissions')==1
+    # A checkbox that appears after planning was never decided. It blocks.
+    page.evaluate('revealAnother()')
+    refused=execute(worker,tab_id,'submitAll')
+    assert refused['blocked'] and 'Inventory' in refused['detail'],refused
+    assert 'Land' not in refused['detail'],'the seen siblings are still not named'
+    assert page.evaluate('submissions')==1

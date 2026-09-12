@@ -21,10 +21,13 @@
       // A changed Part tab is not a new question. Keep the ledger while any
       // previously seen tabs still occur, even if the model rephrases the stem.
       if (this.current && page.part_tabs?.some(t => this.current.tabs.has(t.key))) fresh = false;
-      let q = fresh ? {id, text:action.question, plan:action.plan || '', parts:new Map(), tabs:new Map(), steps:0, submitted:false} :
+      let q = fresh ? {id, text:action.question, plan:action.plan || '', parts:new Map(), tabs:new Map(), seen:new Set(), steps:0, submitted:false} :
         (this.questions.get(id) || this.current);
       if (fresh) this.questions.set(id, q);
       this.current = q;
+      // Every control on screen while the plan was being made. Deciding to leave
+      // a checkbox unticked only counts as a decision if the model could see it.
+      q.seen ||= new Set(); for (const e of page.elements) q.seen.add(e.key);
       if (action.plan && !q.plan) q.plan = action.plan;
       for (const incoming of action.parts || []) {
         const target = page.elements.find(e => e.ref === incoming.ref && answerTarget(e));
@@ -124,14 +127,19 @@
         const remaining=this.outstanding();
         if(remaining.length)return 'Cannot hand in; outstanding: '+remaining.join(', ');
         // Every control the extension would treat as an answer has to be
-        // accounted for before hand-in, not only text boxes. One option in a
-        // radio group or a row of choice buttons covers its siblings: the three
-        // options the student did not pick are not unanswered questions.
+        // accounted for before hand-in, not only text boxes. Siblings of a
+        // bound answer are covered in two different ways:
+        //  - radios and single-choice buttons: picking one decides them all.
+        //  - checkboxes and switches: independent, so an unticked one is only a
+        //    decision if it was on screen when the plan was made (`seen`). One
+        //    that appeared afterwards was never decided and blocks hand-in.
         const bound=new Set([...this.questions.values()].flatMap(q=>[...q.parts.values()].map(p=>p.target_key)));
         const boundGroups=new Set(page.elements.filter(e=>bound.has(e.key)&&e.group!=null).map(e=>e.group));
-        const exclusive=e=>e.role==='radio'||e.role==='checkbox'||e.role==='option'||e.role==='switch'||(e.role==='button'&&e.choice);
-        const unplanned=page.elements.filter(e=>!e.disabled && answerTarget(e) && !bound.has(e.key)
-          && !(exclusive(e) && e.group!=null && boundGroups.has(e.group)));
+        const seenAtPlan=new Set([...this.questions.values()].flatMap(q=>[...(q.seen||[])]));
+        const exclusive=e=>e.role==='radio'||e.role==='option'||(e.role==='button'&&e.choice);
+        const independent=e=>e.role==='checkbox'||e.role==='switch';
+        const covered=e=>e.group!=null && boundGroups.has(e.group) && (exclusive(e) || (independent(e) && seenAtPlan.has(e.key)));
+        const unplanned=page.elements.filter(e=>!e.disabled && answerTarget(e) && !bound.has(e.key) && !covered(e));
         if(unplanned.length)return 'Cannot hand in; unplanned answer controls: '+unplanned.map(e=>e.name||e.blank||e.key).join(', ');
         if(page.warnings?.length)return 'Cannot hand in while observation limitations remain: '+page.warnings.join('; ');
         return '';
