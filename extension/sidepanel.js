@@ -8,6 +8,7 @@ const ALL_SITES = ['<all_urls>'];
 
 let armed = false;
 let running = false;
+let runPage = '';
 let tabInfo = null;   // kept fresh so a permission request stays inside the user gesture
 
 function paintEth() {
@@ -105,7 +106,7 @@ $('copylog').onclick = async () => {
   });
   const header = `Assignment Lab 2.0 log — ${new Date().toLocaleString()}\n`
     + `${$('questions').textContent} questions, ${$('steps').textContent} steps, ${$('cost').textContent}\n`
-    + `page: ${$('page').textContent}\n${'-'.repeat(60)}`;
+    + `page: ${runPage || $('page').textContent}\n${'-'.repeat(60)}`;
   try {
     await navigator.clipboard.writeText([header, ...lines].join('\n'));
     banner(`Copied ${entries.length} log entries.`);
@@ -116,6 +117,7 @@ $('copylog').onclick = async () => {
 
 function paintState(state) {
   running = state.running;
+  if(state.runUrl)runPage=state.runUrl+' — '+(state.runTitle||'');
   $('questions').textContent = state.questions || 0;
   $('steps').textContent = state.steps;
   $('cost').textContent = '$' + (state.cost || 0).toFixed(4);
@@ -245,7 +247,7 @@ $('stop').onclick = async () => {
 $('advance').onchange = async () => {
   await chrome.storage.local.set({ advance: $('advance').checked });
 };
-for (const id of ['auto_submit', 'badges']) {
+for (const id of ['auto_submit', 'badges', 'double_check']) {
   $(id).onchange = () => chrome.storage.local.set({ [id]: $(id).checked });
 }
 
@@ -267,7 +269,7 @@ chrome.runtime.onMessage.addListener((message) => {
 });
 
 (async function boot() {
-  const stored = await chrome.storage.local.get(['backend', 'model', 'note', 'armed', 'advance', 'auto_submit', 'badges']);
+  const stored = await chrome.storage.local.get(['backend', 'model', 'note', 'armed', 'advance', 'auto_submit', 'badges', 'double_check']);
   $('backend').value = stored.backend || DEFAULT_BACKEND;
   $('model').value = stored.model || '';
   $('note').value = stored.note || '';
@@ -275,6 +277,7 @@ chrome.runtime.onMessage.addListener((message) => {
   $('advance').checked = stored.advance === true;
   $('auto_submit').checked = stored.auto_submit === true;
   $('badges').checked = stored.badges !== false;
+  $('double_check').checked = stored.double_check !== false;
   await refreshPage();
   const held = await accessGranted('<all_urls>');
   if (armed && !held) {

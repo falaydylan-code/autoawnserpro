@@ -1,0 +1,15 @@
+<!doctype html><meta charset="utf-8"><title>Worksheet dropdown regression</title>
+<style>td,th{border:1px solid;padding:8px;min-width:150px}table{border-collapse:collapse}ul{background:white;border:1px solid;position:absolute;padding:8px}li{padding:5px;list-style:none;cursor:pointer}</style>
+<h1>Classify each account</h1><table><tr><th>Account</th><th>Account Type</th><th>Statement</th></tr></table><output></output>
+<script>
+const names=['Accounts Payable','Common Stock','Equipment','Accounts Receivable','Notes Payable','Cash','Retained Earnings','Office Expense','Sales Revenue','Supplies'];
+for(let i=0;i<10;i++){
+ const row=document.querySelector('table').insertRow();row.insertCell().textContent=names[i];
+ for(let j=0;j<2;j++){
+  const cell=row.insertCell();cell.id=`cell_${i}_${j}`;cell.className='dropDownList responseCell';cell.tabIndex=1;cell.setAttribute('dropdowntype','dropDown');cell.setAttribute('aria-label',names[i]+(j?' Statement':' Account Type'));
+  cell.onclick=()=>{document.querySelector('ul')?.remove();const menu=document.createElement('ul');menu.role='listbox';menu.setAttribute('aria-labelledby',cell.id);const r=cell.getBoundingClientRect();menu.style.left=r.x+'px';menu.style.top=r.bottom+'px';
+   for(const label of j?['Income Statement','Balance Sheet']:['Asset','Expense','Liability','Revenue',"Stockholders' Equity"]){const option=document.createElement('li');option.role='option';option.textContent=label;option.onclick=()=>{cell.textContent=label;menu.remove();};menu.append(option);}document.body.append(menu);
+  };
+ }
+}
+</script>

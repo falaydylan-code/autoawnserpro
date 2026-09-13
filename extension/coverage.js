@@ -6,7 +6,7 @@
   // multiple-choice options are styled buttons, not native radios; without it a
   // correct click could never be verified and the question could never advance.
   const ANSWER_ROLES = ['textbox','select','radio','checkbox','option','switch','combobox','spinbutton'];
-  const answerTarget = e => ((ANSWER_ROLES.includes(e.role) || (e.role==='button' && e.choice)) && !e.control) || e.drag==='target';
+  const answerTarget = e => ((ANSWER_ROLES.includes(e.role) || e.dropdown || e.opaque || (e.role==='button' && e.choice)) && !e.control) || e.drag==='target';
   function questionId(text, hint='') {
     const stem = normalize(hint || text).replace(/\bpart\s+[a-z0-9]+\s*[:.)-]?/g, '').trim();
     let hash = 2166136261;
@@ -16,12 +16,40 @@
   class Coverage {
     constructor() { this.questions = new Map(); this.current = null; this.history = []; }
     read(action, page) {
-      const id = questionId(action.question, page.question_hint);
+      this.revised = [];
+      // The page's own question id, taken from the container of the controls
+      // this plan points at -- not the first one on the page, which on a
+      // multi-question page made every read hash to the same question.
+      const qids = [...new Set((action.parts || []).map(p => page.elements.find(e => e.ref === p.ref)?.qid).filter(Boolean))];
+      const hint = qids.length === 1 ? qids[0] : (qids.length ? '' : page.question_hint);
+      const id = questionId(action.question, hint);
       let fresh = !this.questions.has(id);
       // A changed Part tab is not a new question. Keep the ledger while any
       // previously seen tabs still occur, even if the model rephrases the stem.
       if (this.current && page.part_tabs?.some(t => this.current.tabs.has(t.key))) fresh = false;
-      let q = fresh ? {id, text:action.question, plan:action.plan || '', parts:new Map(), tabs:new Map(), steps:0, submitted:false} :
+      // Nor is a rephrased stem. The answer controls are the question's real
+      // identity -- but only the controls with work still on them. A page that
+      // reuses one input for every question (MathPapa does) must not fold the
+      // next question into a finished one: that adopted the old part, tripped
+      // the plan-change guard and killed the run. And when the page names its
+      // questions (data-question-id), a different name is a different question
+      // whatever the controls say.
+      if (fresh && this.current && this.current.parts.size) {
+        const namedDifferently = hint && this.current.hint && hint !== this.current.hint;
+        const unfinished = [...this.current.parts.values()].filter(p => !p.verified);
+        const owned = new Set(unfinished.map(p => p.target_key).filter(Boolean));
+        const incomingKeys = (action.parts || []).map(p => page.elements.find(e => e.ref === p.ref)?.key).filter(Boolean);
+        const onScreen = new Set(page.elements.map(e => e.key));
+        const overlap = incomingKeys.some(k => owned.has(k));
+        // "All my unfinished controls are still on screen" only says the old
+        // question has not gone away. It cannot say the incoming parts belong
+        // to it: on a page showing several questions at once, parts aimed at
+        // entirely different controls are a different question. So that
+        // signal counts only for a read that brings no parts of its own.
+        const stillHere = incomingKeys.length === 0 && owned.size > 0 && [...owned].every(k => onScreen.has(k));
+        if (!namedDifferently && (overlap || stillHere)) fresh = false;
+      }
+      let q = fresh ? {id, text:action.question, hint, plan:action.plan || '', parts:new Map(), tabs:new Map(), steps:0, submitted:false} :
         (this.questions.get(id) || this.current);
       if (fresh) this.questions.set(id, q);
       this.current = q;
@@ -34,13 +62,45 @@
       // answer control (or the first adopted answer). A plan-less read, or one
       // whose refs point at nothing usable, has decided nothing yet.
       if (action.plan && !q.plan) q.plan = action.plan;
-      for (const incoming of action.parts || []) {
-        const target = page.elements.find(e => e.ref === incoming.ref && answerTarget(e));
+      for (let incoming of action.parts || []) {
+        const target = page.elements.find(e => e.ref === incoming.ref && (answerTarget(e)||incoming.kind==='ordering'||incoming.order?.length||incoming.sequence?.length>=2));
+        // One cell, one part. A re-read that gives an owned cell a new id is
+        // talking about the existing part; adopt its id so the ledger does not
+        // grow twins that both track the same control.
+        const owner = target && !q.parts.has(incoming.id)
+          ? [...q.parts.values()].find(p => p.target_key === target.key) : null;
+        if (owner) incoming = {...incoming, id: owner.id};
         const prev = q.parts.get(incoming.id);
         if (prev && prev.answer !== '' && normalize(prev.answer) !== normalize(incoming.answer)) {
-          throw new Error(`Plan changed for ${prev.what}: "${prev.answer}" to "${incoming.answer}". Stop and review before replacing a committed answer.`);
+          // This guard exists to catch a model re-deriving a different answer.
+          // Sharpening an answer it has not entered yet to the label the page
+          // actually offers -- "Equity" becoming "Stockholders' Equity" once
+          // the menu is open -- is not that, and stopping there killed a run
+          // that had planned all twenty cells correctly. One answer containing
+          // the other, before entry, is a refinement and is kept.
+          const a=normalize(prev.answer), b=normalize(incoming.answer);
+          const refinement=!prev.entered && (a.includes(b) || b.includes(a));
+          if (refinement) { prev.answer=incoming.answer; prev.refined=true; }
+          else if ((prev.revisions||0) >= 1) {
+            // Twice is the model changing its mind back and forth. Stop.
+            throw new Error(`Plan changed again for ${prev.what}: "${prev.answer}" to "${incoming.answer}". Stop and review before replacing a committed answer.`);
+          } else {
+            // Once is a correction -- or a slip -- and either way one garbled
+            // field must not end a twenty-part plan. Take it, undo the part's
+            // progress so it is re-entered and re-verified, and say so loudly.
+            this.revised.push(`${prev.what}: "${prev.answer}" -> "${incoming.answer}"`);
+            prev.answer=incoming.answer; prev.revisions=(prev.revisions||0)+1;
+            prev.entered=false; prev.verified=false; prev.visualConfirmed=false; prev.domVerified=undefined; prev.evidence=null;
+          }
         }
         const part = prev || {...incoming, entered:false, verified:false, target_key:'', evidence:null};
+        if(incoming.kind!=='ordering'&&(incoming.order?.length||(incoming.sequence?.length>=2&&target&&!answerTarget(target))))incoming={...incoming,kind:'ordering'};
+        if(incoming.kind==='ordering'){
+          const keys=(incoming.order||[]).map(ref=>page.elements.find(e=>e.ref===ref)?.key);
+          if(keys.some(k=>!k))throw new Error('Ordering plan contains an unavailable item. Re-observe.');
+          if(prev?.order_keys?.length && JSON.stringify(prev.order_keys)!==JSON.stringify(keys))throw new Error('The committed ordering sequence changed. Stop and review.');
+          part.kind='ordering';part.order_keys=keys;part.sequence=incoming.sequence||[];
+        }
         if (prev && prev.answer === '' && !prev.entered) { part.answer=incoming.answer; part.what=incoming.what; }
         if (target && (!part.target_key || !page.elements.some(e=>e.key===part.target_key))) {
           part.target_key=target.key; part.verified=false; part.evidence=null;
@@ -112,7 +172,7 @@
       return `${parts.filter(p=>p.verified).length} of ${parts.length} parts done`+
         (remaining.length?'; remaining: '+remaining.join(', '):'');
     }
-    ledger() { return [...(this.current?.parts.values() || [])].map(({id,what,answer,entered,verified,target_key,source_key='',source_label=''})=>({id,what,answer,entered,verified,target_key,source_key,source_label})); }
+    ledger() { return [...(this.current?.parts.values() || [])].map(({id,what,answer,entered,verified,target_key,source_key='',source_label='',kind='value',sequence=[]})=>({id,what,answer,entered,verified,target_key,source_key,source_label,kind,sequence})); }
     budget() {return Math.min(100,6+4*(this.current?.parts.size || 1));}
     outstanding(all=true) {
       const questions=all?[...this.questions.values()]:[this.current].filter(Boolean);
@@ -146,9 +206,11 @@
         const exclusive=e=>e.role==='radio'||e.role==='option'||(e.role==='button'&&e.choice);
         const independent=e=>e.role==='checkbox'||e.role==='switch';
         const covered=e=>e.group!=null && boundGroups.has(e.group) && (exclusive(e) || (independent(e) && seenAtPlan.has(e.key)));
-        const unplanned=page.elements.filter(e=>!e.disabled && answerTarget(e) && !bound.has(e.key) && !covered(e));
+        const orderMembers=new Set([...this.questions.values()].flatMap(q=>[...q.parts.values()].filter(p=>p.kind==='ordering'&&p.verified).flatMap(p=>p.order_keys||[])));
+        const unplanned=page.elements.filter(e=>!e.disabled && answerTarget(e) && !bound.has(e.key) && !orderMembers.has(e.key) && !covered(e));
         if(unplanned.length)return 'Cannot hand in; unplanned answer controls: '+unplanned.map(e=>e.name||e.blank||e.key).join(', ');
-        if(page.warnings?.length)return 'Cannot hand in while observation limitations remain: '+page.warnings.join('; ');
+        const blockers=(page.warnings||[]).filter(w=>!w.startsWith('Some custom elements expose no open shadow root'));
+        if(blockers.length)return 'Cannot hand in while observation limitations remain: '+blockers.join('; ');
         return '';
       }
       if(target.control==='advance') {

@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import shutil
 import sys
 import tempfile
 import threading
@@ -21,7 +22,8 @@ sys.path.insert(0,str(ROOT))
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--env-file',type=Path,default=ROOT/'.env')
-    parser.add_argument('--fixture',default='multipart_tabs.html',choices=['multipart_tabs.html','matching_html5.html','matching_pointer.html','blanks_prose.html','table_blanks.html','shadow_question.html'])
+    parser.add_argument('--fixture',default='multipart_tabs.html',choices=['multipart_tabs.html','matching_html5.html','matching_pointer.html','blanks_prose.html','table_blanks.html','shadow_question.html','ordering.html','custom_dropdowns.html','closed_dropdown.html'])
+    parser.add_argument('--backend',default='')
     parser.add_argument('--url',default='')
     parser.add_argument('--timeout',type=int,default=240)
     args=parser.parse_args()
@@ -31,7 +33,7 @@ def main():
                 name,value=line.split('=',1)
                 if name.strip() in ('OPENROUTER_API_KEY','OPENROUTER_MODEL'):os.environ[name.strip()]=value.strip().strip('"\'')
     if not os.environ.get('OPENROUTER_API_KEY'):raise SystemExit('Set OPENROUTER_API_KEY or pass --env-file. No call made.')
-    os.environ.update(APP_ENV='development',PUBLIC_ACCESS='true',BROWSER_MODE='local',MAX_CALLS_PER_INVITE='24',MAX_COST_PER_INVITE='0.50')
+    os.environ.update(APP_ENV='development',PUBLIC_ACCESS='true',BROWSER_MODE='local',MAX_CALLS_PER_INVITE='90',MAX_COST_PER_INVITE='0.50')
     from playwright.sync_api import sync_playwright
     import uvicorn
     from app import app
@@ -50,9 +52,13 @@ def main():
             # SQLite cleanup may outlive the browser on Windows. Keep metering
             # under ignored data/, outside the ephemeral profile.
             os.environ['DATA_DIR']=str(out/('meter-'+str(time.time_ns())))
+            ext=Path(directory)/'extension';shutil.copytree(ROOT/'extension',ext)
+            manifest=json.loads((ext/'manifest.json').read_text(encoding='utf-8'))
+            manifest['host_permissions']+=manifest.pop('optional_host_permissions',[])
+            (ext/'manifest.json').write_text(json.dumps(manifest),encoding='utf-8')
             with sync_playwright() as p:
-                context=p.chromium.launch_persistent_context(directory,channel='chromium',headless=True,
-                    args=[f'--disable-extensions-except={ROOT/"extension"}',f'--load-extension={ROOT/"extension"}'],viewport={'width':1500,'height':1100})
+                context=p.chromium.launch_persistent_context(str(Path(directory)/'profile'),channel='chromium',headless=True,
+                    args=[f'--disable-extensions-except={ext}',f'--load-extension={ext}'],viewport={'width':1500,'height':1100})
                 worker=context.service_workers[0] if context.service_workers else context.wait_for_event('serviceworker')
                 page=context.pages[0];page.goto(args.url or f'http://127.0.0.1:{fixtures.server_port}/{args.fixture}',wait_until='domcontentloaded')
                 page.wait_for_timeout(1000)
@@ -63,7 +69,7 @@ def main():
                     starts=page.get_by_role('button',name='Start',exact=True)
                     if starts.count():starts.first.click()
                 tab_id=worker.evaluate('(url)=>chrome.tabs.query({}).then(ts=>ts.find(t=>t.url===url).id)',page.url)
-                await_config={'backend':f'http://127.0.0.1:{port}','model':os.environ.get('OPENROUTER_MODEL',''),'advance':False,'auto_submit':not bool(args.url),'badges':True,
+                await_config={'backend':args.backend or f'http://127.0.0.1:{port}','model':os.environ.get('OPENROUTER_MODEL',''),'advance':False,'auto_submit':not bool(args.url),'badges':True,
                     'note':('Complete every part of this one practice question, then use Submit Assignment when every part is verified. Do not start another question.' if not args.url else 'Answer this one practice question, use Check if available, then stop. Do not start another question.')}
                 worker.evaluate('(s)=>chrome.storage.local.set(s)',await_config)
                 extension_id=worker.url.split('/')[2]
@@ -87,6 +93,7 @@ def main():
                 (out/(name+'.json')).write_text(json.dumps(status,indent=2),encoding='utf-8')
                 print(json.dumps({'steps':status['steps'],'cost':status['cost'],'parts':status['parts'],'page':status['page_text'][:1800]}),flush=True)
                 context.close()
+                if not status['parts'] or not all(p['verified'] for p in status['parts']):raise SystemExit('Smoke check incomplete: inspect saved log and screenshot.')
     finally:
         server.should_exit=True;thread.join(timeout=5);fixtures.shutdown();fixtures.server_close()
 

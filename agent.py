@@ -30,7 +30,7 @@ MAX_PAGE_TEXT = 6000
 
 # The closed action vocabulary. A page can supply an answer; it can never
 # introduce a verb. Anything outside this list is refused without execution.
-ACTIONS = ('read_check', 'fill', 'click', 'select', 'scroll', 'drag', 'press', 'scroll_to', 'done', 'give_up')
+ACTIONS = ('read_check', 'fill', 'click', 'select', 'scroll', 'drag', 'reorder', 'visual_click', 'visual_drag', 'verify', 'press', 'scroll_to', 'done', 'give_up')
 
 SYSTEM_PROMPT = """You are driving a web browser for a student, one step at a time.
 
@@ -237,6 +237,41 @@ Reply with one JSON object and nothing else. No markdown fences, no prose.
 """
 
 
+SYSTEM_PROMPT += '''
+PROTOCOL 2: CUSTOM DROPDOWNS AND ORDERING
+The parts checklist supports kind:"value" (default) and kind:"ordering".
+For ordering use ONE part with ref of the list, order:[item refs in DESIRED order],
+sequence:[labels in DESIRED order], answer:"ordered list". A container is NOT a
+position. Never drag an item to its own container to confirm it. If current order
+is already correct, let the harness verify it; do not manufacture a drag.
+Move an item with {"action":"reorder","ref":6,"to":8,"placement":"before","part_id":"order"}.
+For custom dropdowns, first click the trigger with purpose:"open" and part_id.
+Opening a menu is preparation, not an answer. On the NEXT observation select an
+option with purpose:"answer", part_id and its fresh ref; the original cell is
+the verification target. Do not use native select on a custom dropdown.
+An entry with role widget is a box the page draws that the index cannot see
+into. Click it by ref like any control -- purpose:"open" first if it is a menu,
+then purpose:"answer" -- and the harness drives real mouse input and checks the
+result from a fresh screenshot. Prefer that to guessing coordinates.
+If a required control is visible but has no ref at all, do not conclude it is a
+closed shadow root. Use visual_click with point:{x:0..1,y:0..1}, part_id, purpose:"open"
+or "answer", observation_id from this screenshot. Coordinates are fractions of
+the entire supplied screenshot, not a cropped image. visual_drag also needs a
+destination:{x,y} and purpose:"answer". Only target the question answer area or
+its open menu, never submission, navigation, account or unrelated controls.
+In phase verify return ONLY action:"verify", part_id, observation_id, status:
+"confirmed"|"mismatch"|"uncertain", observed:"actual visible cell value", or
+observed_sequence:[actual visible top-to-bottom labels], reason:"brief evidence".
+Report what is currently VISIBLE, not what you planned or clicked. If clipped,
+ambiguous or not readable report uncertain. Verification cannot issue actions.
+'''
+
+
+class Point(BaseModel):
+    x: float = Field(ge=0, le=1, allow_inf_nan=False)
+    y: float = Field(ge=0, le=1, allow_inf_nan=False)
+
+
 class Part(BaseModel):
     model_config = ConfigDict(extra='forbid')
     id: str = Field(min_length=1, max_length=80)
@@ -244,6 +279,9 @@ class Part(BaseModel):
     answer: str = Field(max_length=1000)
     ref: int | None = Field(default=None, ge=1, le=10000)
     source_ref: int | None = Field(default=None, ge=1, le=10000)
+    kind: Literal['value', 'ordering'] = 'value'
+    order: list[int] = Field(default_factory=list, max_length=60)
+    sequence: list[str] = Field(default_factory=list, max_length=60)
 
 
 class Action(BaseModel):
@@ -257,6 +295,14 @@ class Action(BaseModel):
     mode: Literal['', 'pointer'] = ''
     part_id: str = Field(default='', max_length=80)
     parts: list[Part] = Field(default_factory=list, max_length=60)
+    placement: Literal['', 'before', 'after'] = ''
+    observation_id: str = Field(default='', max_length=80)
+    point: Point | None = None
+    destination: Point | None = None
+    purpose: Literal['', 'open', 'answer'] = ''
+    status: Literal['', 'confirmed', 'mismatch', 'uncertain'] = ''
+    observed: str = Field(default='', max_length=1000)
+    observed_sequence: list[str] = Field(default_factory=list, max_length=60)
     text: str = Field(default='', max_length=4000)
     option: str = Field(default='', max_length=1000)
     direction: str = Field(default='', max_length=10)
@@ -312,12 +358,27 @@ def parse_action(raw, finish_reason=''):
             f'The model asked for "{action.action}", which is not an allowed action. '
             'Nothing was done.'
         )
-    if action.action in ('fill', 'click', 'select', 'drag', 'press', 'scroll_to') and action.ref is None:
+    if action.action in ('fill', 'click', 'select', 'drag', 'reorder', 'press', 'scroll_to') and action.ref is None:
         raise ValueError('The model named no element to act on. Nothing was done.')
     if action.action == 'drag' and (action.to is None or action.to == action.ref):
         raise ValueError('Drag requires a different destination element (to). Nothing was done.')
     if action.action == 'press' and not action.key:
         raise ValueError('Press requires a supported key. Nothing was done.')
+    if action.action == 'reorder' and (action.to is None or action.ref == action.to or not action.placement or not action.part_id):
+        raise ValueError('Reorder needs distinct source and anchor refs, before/after placement and part_id.')
+    if action.action.startswith('visual_') and (not action.point or not action.part_id or not action.observation_id or not action.purpose):
+        raise ValueError('Visual input needs point, part_id, purpose and current observation_id.')
+    if action.action == 'visual_drag' and not action.destination:
+        raise ValueError('Visual drag needs destination coordinates.')
+    if action.action == 'verify' and (not action.part_id or not action.observation_id or not action.status):
+        raise ValueError('Verification needs part_id, observation_id and status.')
+    for part in action.parts:
+        # `order` is only ever sent for an ordering plan; a model that supplies it
+        # but forgets kind:"ordering" has still told us what the part is.
+        if part.kind != 'ordering' and part.order:
+            part.kind = 'ordering'
+        if part.kind == 'ordering' and (len(part.sequence) < 2 or (part.order and (len(part.order) != len(part.sequence) or len(set(part.order)) != len(part.order)))):
+            raise ValueError('Ordering needs a sequence of labels and, when available, distinct item refs in that same desired order.')
     if len({p.id for p in action.parts}) != len(action.parts):
         raise ValueError('Part IDs must be unique. Nothing was done.')
     if action.action == 'scroll' and action.direction not in ('up', 'down'):
@@ -355,7 +416,7 @@ def build_observation_text(observation):
             parts.append('ALREADY SELECTED')
         if el.get('disabled'):
             parts.append('DISABLED')
-        for field in ('row', 'column', 'blank', 'drag', 'control'):
+        for field in ('row', 'column', 'blank', 'drag', 'control', 'dropdown', 'order_index', 'list_ref', 'owner_ref'):
             if el.get(field):
                 parts.append(f'{field}: {str(el[field])[:200]}')
         if el.get('group'):
@@ -386,7 +447,10 @@ def build_observation_text(observation):
         context.append(line)
     if observation.get('task_note'):
         context.append('Student note: ' + str(observation['task_note'])[:500])
+    context.append('OBSERVATION ID: ' + str(observation.get('observation_id', '')))
     context.append('PROGRESS: ' + str(observation.get('progress') or 'No parts planned yet.'))
+    if observation.get('phase') == 'verify':
+        context.append('VERIFY ONLY: Read the current visible result for ' + json.dumps(observation.get('verification', {})) + '. Return verify, not an action.')
     if observation.get('ledger'):
         # Only what the model can act on. Internal identity strings (target_key,
         # source_key) are harness state and were pulling attention away from the
@@ -493,10 +557,21 @@ async def decide(owner, observation, model, record=None, require=''):
                 raw = (data.get('choices') or [{}])[0].get('message', {}).get('content')
                 raw = raw.replace(key, '[redacted]') if isinstance(raw, str) else ''
                 finish_reason = (data.get('choices') or [{}])[0].get('finish_reason') or ''
-                record.update(cost=cost, input_tokens=usage.get('prompt_tokens'),
-                              output_tokens=usage.get('completion_tokens'), raw_reply=raw,
+                record.update(cost=(record.get('cost') or 0) + cost if cost is not None else None,
+                              input_tokens=(record.get('input_tokens') or 0) + (usage.get('prompt_tokens') or 0),
+                              output_tokens=(record.get('output_tokens') or 0) + (usage.get('completion_tokens') or 0), raw_reply=raw,
                               finish_reason=finish_reason)
-                action = parse_action(raw, finish_reason)
+                try:
+                    action = parse_action(raw, finish_reason)
+                    if action.action == 'verify' and require != 'verify':
+                        raise ValueError('Verification may only be returned during the verification phase. '
+                                         'Return an action that changes the page, or done.')
+                except ValueError as exc:
+                    if attempt == 0 and cost is not None:
+                        body['messages'].extend([{'role': 'assistant', 'content': raw},
+                            {'role': 'user', 'content': 'Invalid proposal: ' + str(exc) + ' Correct the action once using the current observation. No action has executed.'}])
+                        continue
+                    raise
                 wrong_verb = (
                     (require == 'act' and action.action == 'read_check')
                     or (require not in ('', 'act') and action.action != require)

@@ -44,8 +44,47 @@ Informed by observed browser-agent behavior; this is our own implementation.
 - **Instructions come only from the system prompt.** Page text is fenced as
   `BEGIN UNTRUSTED PAGE TEXT` and is data, never commands.
 - **The action vocabulary is closed** — `read_check`, `fill`, `click`, `select`,
-  `scroll`, `drag`, `press`, `scroll_to`, `done`, `give_up`. Anything else is rejected before execution, so a
-  page cannot introduce a verb.
+  `scroll`, `drag`, `reorder`, `visual_click`, `visual_drag`, `verify`, `press`,
+  `scroll_to`, `done`, `give_up`. Anything else is rejected before execution, so a
+  page cannot introduce a verb. `verify` is accepted only in the verification
+  phase and can never execute anything.
+- **Real mouse input is a bounded fallback, not the default.** `reorder`, the
+  `visual_*` verbs and clicks on a `widget` (a closed-shadow host the DOM cannot
+  see into) go through `chrome.debugger` (`extension/visual.js`). It attaches to
+  the assignment tab only, only while needed, and detaches on Stop, ETH off,
+  completion or failure. Every visual action is tied to the exact screenshot
+  the model saw (`observation_id`); a changed viewport, URL, digest or pixel hash
+  makes it stale and it is refused. Guard refusals — off the answer area, on a
+  navigation or sensitive control, cross-origin — are returned to the model to
+  re-aim, never thrown. A gesture interrupted by Stop releases the button at its
+  origin, because releasing at the destination would complete the drop.
+- **The extension checks `/api/capabilities` before its first paid call** and
+  refuses to run against a backend without protocol 2. Extension and backend
+  ship together; this is the seam that broke silently in 0.6.0.
+- **Two witnesses verify an answer.** The DOM reads the control back, and a
+  separate `verify`-phase model call reads a fresh screenshot and may only
+  report what is visible. With the panel's "confirm each answer with a
+  screenshot" switch on (the default) a part is verified only when both agree
+  (`settle()` in `background.js`); where the DOM cannot read the control, the
+  screenshot decides alone; a DOM `false` always wins. A model's claim of
+  success is never evidence. The screenshot witness is a paid call, so with the
+  switch off the DOM alone verifies and the screenshot is used only where the
+  DOM is blind.
+- **A visual point must hit the planned control.** When the part's control is
+  known, a `visual_*` point (the destination, for a drag) has to land on it or
+  on the menu it owns, not merely in the same table. A gesture is abandoned the
+  moment the tab navigates or starts loading. A closed-shadow `widget` is an
+  answer candidate only inside an answer region and at control size — not page
+  chrome — so component shells cannot block hand-in or attract a click.
+- **The unfinished controls are the question's identity.** A re-read that points
+  at controls the current plan still has work on is the same question however
+  the stem is phrased; a finished question never absorbs the next one, so a page
+  that reuses one input per question gets a new question each time. When the
+  page names its questions (`data-question-id`, taken from the container of the
+  plan's own controls), a different name is a different question. A cell already
+  owned keeps its part rather than growing a twin. Sharpening an unentered
+  answer to the visible label is a refinement; changing an answer outright is
+  taken once — the part is reset and re-entered — and refused the second time.
 - **Credential and payment fields are never described to the model**, so it
   cannot be asked to fill one (`sensitive()` in `content.js`).
 - **Hand-in requires a worker-issued permit**, produced only with the hand-in

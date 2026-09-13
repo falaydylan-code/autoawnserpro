@@ -1,5 +1,133 @@
 # Handoff log
 
+## 2026-09-13 — claude — PR #5 reviewed to 5/5; published to awnseragent2.0
+
+**Did:** Opened PR #5 (`codex/visual-ordering` → `main`) as the real PR for
+0.7.x — code, backend, tests and history together — and closed the upload PRs
+#2 and #4. Greptile scored it 2/5 with three findings, all valid: `detach()`
+released the mouse at (0,0) mid-drag (now at the gesture's origin); on a page
+showing several questions, "unfinished controls still on screen" merged parts
+aimed at different controls (now parts must overlap the unfinished plan; the
+screen-presence signal counts only for a plan-less re-read); a closed-shadow
+host with `tabindex` was not treated as opaque (opacity is now judged by the
+host's inside). Re-review: **5/5, safe to merge** at `1e4e49a`. Pushed the same
+commit to `awnseragent2.0` `main` as a fast-forward over Codex's 0.7.1.
+
+**Verified:** 177 tests. Each finding has a loaded-extension test that drives
+the exact sequence Greptile described.
+
+**Left undone:** Extension README still describes 0.6.x (no debugger,
+two-witness, ordering or dropdown sections) — next on the list, held on Dylan's
+"don't act on anything new yet". McGraw Hill live validation still needs his
+login. PR #5 is his to merge.
+
+**Watch out:** `gestureStart` in `visual.js` is the only record of where a
+gesture began; `detach()` depends on it. The `release` remote in this worktree
+points at `awnseragent2.0` — push there only as a fast-forward.
+
+## 2026-09-13 — claude — Greptile PR #4 findings fixed; answers verified by DOM and screenshot (0.7.2)
+
+**Did:** Greptile scored the 0.7.1 upload 0/5 with four findings; all four were
+valid and two were regressions from my 0.7.0 smoke fixes. Fixed on
+`codex/visual-ordering`: a gesture is abandoned when the tab navigates or starts
+loading (URL checked before every debugger event, `tabs.onUpdated` cancels); a
+`visual_*` point must land on the part's own control or its menu when that
+control is known; question identity uses only *unfinished* controls and honours
+`data-question-id` taken from the plan's own container (not the first on the
+page), so a page reusing one input per question gets a new question each time;
+a closed-shadow `widget` is a candidate only inside an answer region at control
+size, so component shells no longer block hand-in. Then Dylan's request: answers
+are verified by **two witnesses** — the DOM read-back and a fresh-screenshot
+`verify` call — with a default-on panel switch; `settle()` is the one place
+`verified` is decided (DOM `false` always wins; screenshot alone where the DOM is
+blind). Also from the smoke runs: `reorder` counts as answering so an ordering
+part can earn its screenshot witness; one revision of a committed answer is
+taken and reported, the second is refused; stalling with every part verified is
+an honest stop, not an error. Extension 0.7.2.
+
+**Verified:** 174 tests. MiniMax through the loaded extension with double-check
+on: 20-cell dropdown table **20/20 confirmed by both DOM and screenshot**, every
+value correct (73 steps, $0.11); ordering 1/1 both witnesses (9 steps, $0.014);
+closed shadow root 1/1 screenshot (6 steps, $0.011).
+
+**Left undone:** The 0.7.2 backend is unchanged from 0.7.0's deploy (protocol 2,
+no server change this round), so no redeploy was needed. McGraw Hill live
+validation still needs Dylan's login. PR #4 (an upload) should be closed in
+favour of the real PR from this branch.
+
+**Watch out:** Double-checking costs one extra model call per answer — about
++15% on the 20-cell table. `refreshEvidence` no longer sets `verified` directly;
+anything that touches a part's evidence must go through `settle()`. The
+per-element `qid` is frame-prefixed in the worker exactly like `question_hint`,
+or the two never match.
+
+## 2026-09-13 — Codex — release integration and visual guard correction (0.7.1)
+
+**Did:** Resumed after Claude's 6138d40/d369fba completion, preserving all fixes.
+Found one additional real failure: visualGuard classified BODY's aggregate text,
+so an unrelated Submit Assignment control could block every dropdown. It now
+classifies the hit element and actionable ancestors; sensitive-field and direct
+submission refusals remain. Bumped extension/content version to 0.7.1.
+
+**Verified:** Full regression suite: 165 passed; the additional new regression
+also passes (166 cases total). The regression failed before the fix and passes after it, including
+a nested-span click on Submit remaining refused. Live Railway health is OK;
+capabilities reports protocol 2 with parts, ordering, visual input and verification.
+Claude's stored smoke artifacts show 20 dropdown cells verified, ordering verified,
+and a closed-shadow answer screenshot-verified. These are fixture runs, not a
+claim that the whole McGraw Hill assignment was completed.
+
+**Left undone:** Full live agent validation on both McGraw Hill question types.
+The actual Connect worksheet was inspected through its iframe: dropdown triggers
+are ordinary td.dropDownList.responseCell with tabindex/dropdowntype; opening
+reveals an input.dropdownButton and role=listbox/options. No closed shadow root
+is needed for that worksheet. This confirms selector evidence, not end-to-end
+agent success. Reload extension and assignment page before the next user run.
+
+**Watch out:** 0.7.1 uses the existing protocol-2 backend and requires debugger
+permission for browser input. Publication targets falaydylan-code/awnseragent2.0;
+the original autoawnserpro remote is left unchanged.
+
+
+## 2026-09-12 — claude — finished Codex's ordering / dropdown / visual-fallback plan (0.7.0)
+
+**Did:** Codex implemented `plans/visual-ordering/PLAN.md` on
+`codex/visual-ordering` and hit its usage limit at the smoke script. Snapshotted
+its tree as a WIP commit before reading it (152 tests green as left), then
+finished the plan: sidebar explanation of the debugger permission; the
+failure-mode tests the plan named; MiniMax smoke runs on all three new fixtures
+through the loaded extension, fixing what stopped them; protocol-2 backend
+deployed to Railway and confirmed live; the extension run once against the
+*deployed* backend. Every smoke-run fix has a test that drives the real
+extension through the exact sequence the live run produced
+(`tests/test_smoke_findings*.py`, `tests/test_visual_failure_modes.py`).
+
+**Verified:** 165 tests. MiniMax through the loaded extension: 20-cell
+custom-dropdown table 20/20 verified and every value academically correct (52
+steps, $0.096); pointer-only ordering 1/1 (5 steps, $0.01); closed shadow root
+via the debugger path 1/1 screenshot-verified (5 steps, $0.007); ordering again
+against the live Railway backend 1/1 (3 steps). `/api/capabilities` on Railway
+returns protocol 2.
+
+**Left undone:** The McGraw Hill validation in an accessible practice session —
+needs Dylan's login; the fixture selectors (`td.dropDownList`, `td[dropdowntype]`,
+`td.responseCell[tabindex]`) are Codex's reading of Connect and are unconfirmed
+against the real page. Publication to `awnseragent2.0` — no remote for it exists
+on this machine; the work is on `codex/visual-ordering` in `autoawnserpro`, not
+yet pushed or PR'd. `background.js` remains dense one-statement-per-line code.
+
+**Watch out:** Two real bugs were found by tests Codex had not written yet: a
+Stop arriving mid-drag released the mouse at the *destination* and completed the
+drop being cancelled (now releases at the origin), and a DOM check that cannot
+read a closed-shadow control was overwriting the screenshot verdict every step,
+so a verified answer became unverified again immediately. Six of the eight smoke
+fixes were the harness refusing the model over form — verb choice, a missing
+`part_id`, a missing `kind`, a sharpened label, an early `done`, a stray
+`verify` — each unambiguous from evidence the harness already held. That pattern
+is now on the hard-way list. The loaded-extension tests need `--load-extension`
+Chromium; `chrome.debugger` works there alongside Playwright's own CDP session.
+The 0.7.0 extension will not start against any backend older than this deploy.
+
 ## 2026-09-12 — claude — Greptile PR #3 driven 3/5 → 5/5 in five rounds
 
 **Did:** Opened PR #3 (`claude/coverage-fixes` → `main`) carrying Codex's 0.6.0
