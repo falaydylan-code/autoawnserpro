@@ -1,6 +1,6 @@
 /* Observation and bounded DOM actions. No model credentials or strategy here. */
 (() => {
-  const VERSION = '0.7.1';
+  const VERSION = '0.7.2';
   if (window.__assignmentLabContent === VERSION) return;
   window.__assignmentLabContent = VERSION;
   let refs = new Map(), previousKeys = new Set(), cancelled = false;
@@ -166,7 +166,18 @@
     hideUI();refs=new Map();
     const nodes=all(), warnings=[];
     if(nodes.some(n=>n.localName.includes('-')&&!n.shadowRoot)) warnings.push('Some custom elements expose no open shadow root; closed shadow contents cannot be inspected or reliably detected. Use the screenshot; pause if required controls are missing.');
-    const opaque=n=>n.localName.includes('-')&&!n.shadowRoot&&!n.matches(INTERACTIVE)&&!n.querySelector(INTERACTIVE);
+    // A closed-shadow custom element is an answer candidate only with evidence
+    // it is one: it sits inside an answer region (a table cell, form, fieldset,
+    // group or question container), not in page chrome, and it is the size of a
+    // control rather than a layout shell. Without this every <app-header> and
+    // icon element on a component-built site became an "unplanned answer" and
+    // blocked hand-in.
+    const ANSWER_REGION='td,th,[role=gridcell],[role=cell],fieldset,form,label,[role=group],[role=radiogroup],[data-question-id]';
+    const opaque=n=>{
+      if(!(n.localName.includes('-')&&!n.shadowRoot&&!n.matches(INTERACTIVE)&&!n.querySelector(INTERACTIVE)))return false;
+      if(!closest(parent(n),ANSWER_REGION)||closest(n,'header,nav,footer,aside,[role=banner],[role=navigation],[role=contentinfo]'))return false;
+      const r=n.getBoundingClientRect();return r.width>=16&&r.height>=10&&r.width<=800&&r.height<=300;
+    };
     const interactive=nodes.filter(n=>((n.matches(INTERACTIVE)&&(!n.hasAttribute('contenteditable')||n.isContentEditable||n.matches('input,textarea,button,select,[role]')))||opaque(n))&&visible(n)&&!sensitive(n));
     const selected=new Set(interactive);
     for(const el of interactive) for(let n=parent(el);n;n=parent(n)) if(n.matches(GROUPS))selected.add(n);
@@ -182,7 +193,7 @@
       const menuOwner=ownerId?chosen.find(n=>n.id===ownerId):chosen.find(n=>n!==el&&n.matches(DROPDOWNS)&&clean(n.getAttribute('aria-label'))===clean(el.getAttribute('aria-label'))&&clean(el.getAttribute('aria-label')));
       return {ref,key:k,group:local.get(group)||null,depth:Math.min(depth,20),role:role(el),
         name:accessibleName(el).slice(0,400),...blankContext(el),...tableContext(el),
-        dropdown:el.matches(DROPDOWNS),opaque:opaque(el),
+        dropdown:el.matches(DROPDOWNS),opaque:opaque(el),qid:closest(el,'[data-question-id]')?.getAttribute('data-question-id')||'',
         owner_ref:local.get(menuOwner)||null,
         list_ref:local.get(closest(parent(el),LISTS))||null,
         order_index:closest(parent(el),LISTS)?listItems(closest(parent(el),LISTS)).indexOf(el):null,

@@ -56,16 +56,18 @@ def test_sharpening_an_unentered_answer_to_the_visible_label_is_a_refinement_not
     refined = plan_ap_type(w, tid, "Stockholders' Equity")
     assert refined['answer'] == "Stockholders' Equity"
     assert w.evaluate('__assignmentHarness.coverage.questions.size') == 1
-    # but a genuinely different answer, before entry, still stops the run
+    # a genuinely different answer is a revision: taken once, reported, refused the second time
     message = w.evaluate('''async id=>{const h=__assignmentHarness,p=await h.observeAllFrames(id);
-      try{h.coverage.read({question:'Classify accounts',parts:[{id:'a',what:'Accounts Payable Account Type',answer:'Asset',ref:p.elements.find(e=>e.key.endsWith('#cell_0_0')).ref}]},p);return 'accepted';}
-      catch(e){return e.message;}}''', tid)
-    assert 'Plan changed' in message
+      const read=a=>h.coverage.read({question:'Classify accounts',parts:[{id:'a',what:'Accounts Payable Account Type',answer:a,ref:p.elements.find(e=>e.key.endsWith('#cell_0_0')).ref}]},p);
+      read('Asset');const once=[...h.coverage.revised];
+      try{read('Revenue');return {once,twice:'accepted'};}catch(e){return {once,twice:e.message};}}''', tid)
+    assert message['once'] and 'Plan changed again' in message['twice']
 
 
-def test_a_refinement_after_entry_is_still_refused(extension):
-    """Once a value is entered, re-deriving it -- even to a superstring -- is the
-    oscillation this guard exists for."""
+def test_a_change_after_entry_resets_the_part_and_a_second_change_is_refused(extension):
+    """Once a value is entered, changing it is taken once -- the part goes back to
+    unentered so it is re-entered and re-verified -- and refused the second time.
+    Changing back and forth is the oscillation this guard exists for."""
     page, w, tid = navigate(extension, 'custom_dropdowns.html')
     plan_ap_type(w, tid, 'Liability')
     w.evaluate('''async id=>{const h=__assignmentHarness,p=await h.observeAllFrames(id),cell=p.elements.find(e=>e.key.endsWith('#cell_0_0'));
@@ -73,10 +75,12 @@ def test_a_refinement_after_entry_is_still_refused(extension):
       const q=await h.observeAllFrames(id),option=q.elements.find(e=>e.role==='option'&&e.name==='Liability');
       await h.executeAction(id,{action:'click',ref:option.ref,part_id:'a',purpose:'answer'},q,{});}''', tid)
     assert w.evaluate('__assignmentHarness.coverage.ledger()[0].entered')
-    message = w.evaluate('''async id=>{const h=__assignmentHarness,p=await h.observeAllFrames(id);
-      try{h.coverage.read({question:'Classify accounts',parts:[{id:'a',what:'Accounts Payable Account Type',answer:'Current Liability',ref:p.elements.find(e=>e.key.endsWith('#cell_0_0')).ref}]},p);return 'accepted';}
-      catch(e){return e.message;}}''', tid)
-    assert 'Plan changed' in message
+    result = w.evaluate('''async id=>{const h=__assignmentHarness,p=await h.observeAllFrames(id);
+      const read=a=>h.coverage.read({question:'Classify accounts',parts:[{id:'a',what:'Accounts Payable Account Type',answer:a,ref:p.elements.find(e=>e.key.endsWith('#cell_0_0')).ref}]},p);
+      read('Asset');const after=h.coverage.ledger()[0];
+      try{read('Liability');return {after,second:'accepted'};}catch(e){return {after,second:e.message};}}''', tid)
+    assert result['after']['answer'] == 'Asset' and not result['after']['entered'] and not result['after']['verified'], 'taken once, and the part is reset'
+    assert 'Plan changed again' in result['second']
 
 
 def test_a_rephrased_re_read_pointing_at_the_same_cells_is_the_same_question(extension):

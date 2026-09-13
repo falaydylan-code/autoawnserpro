@@ -178,6 +178,12 @@ Do not undo these without a reason, and add to the list when you find another.
   evidence the harness already holds; spend a stall and re-ask on the rest;
   stop only for what cannot be recovered. Every such fix has a test driving the
   real extension through the exact sequence a live run produced.
+- **Uploading a folder is not a pull request.** PR #2 and PR #4 were the
+  extension folder dragged into the GitHub web UI with no history, no backend
+  and no tests. Greptile could review the code but not the tests that cover it,
+  and the fixes could not be pushed to the PR. Every review goes through a real
+  branch push from the worktree, so the reviewer sees the tests and the fixes
+  land on the same PR.
 - **Extension and backend ship together.** 0.6.0 spent a day unable to answer a
   plain question because Railway was still on the previous backend. 0.7.0
   refuses to start without `/api/capabilities` protocol 2. Deploy first, then

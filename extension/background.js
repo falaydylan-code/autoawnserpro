@@ -8,7 +8,7 @@ let coverage=new AssignmentCoverage.Coverage(), decisionAbort=null, runToken='',
 let decisionSnapshot=null, pendingMenu=null,lastCapture=0;
 const visualFailures=new Map();
 let refMap=new Map(), frameIds=[0], activeFrameIds=[],runOrigin='',actionFrameId=0;
-async function settings(){const s=await chrome.storage.local.get(['backend','token','model','note','advance','auto_submit','badges']);return {backend:(s.backend||DEFAULT_BACKEND).replace(/\/+$/,''),token:s.token||'',model:s.model||'',note:s.note||'',advance:s.advance===true,auto_submit:s.auto_submit===true,badges:s.badges!==false};}
+async function settings(){const s=await chrome.storage.local.get(['backend','token','model','note','advance','auto_submit','badges','double_check']);return {backend:(s.backend||DEFAULT_BACKEND).replace(/\/+$/,''),token:s.token||'',model:s.model||'',note:s.note||'',advance:s.advance===true,auto_submit:s.auto_submit===true,badges:s.badges!==false,double_check:s.double_check!==false};}
 function snapshot(){return {running:state.running,steps:state.steps,questions:state.questions,cost:state.cost,progress:state.progress,runUrl,runTitle};}
 function emit(entry){const row={time:new Date().toLocaleTimeString(),...entry};state.log.push(row);if(state.log.length>300)state.log.shift();chrome.runtime.sendMessage({type:'log',row,state:snapshot()}).catch(()=>{});}
 async function injectAll(tabId){const results=await chrome.scripting.executeScript({target:{tabId,allFrames:true},files:['content.js']});frameIds=results.map(r=>r.frameId);await Promise.all(frameIds.map(frameId=>chrome.tabs.sendMessage(tabId,{type:'reset'},{frameId}).catch(()=>{})));return frameIds;}
@@ -33,7 +33,7 @@ async function observeAllFrames(tabId){
       const ref=localToGlobal.get(el.ref),key=frameId+':'+el.key;
       refMap.set(ref,{frameId,ref:el.ref,key,localKey:el.key});
       const box=el.box&&offset.exact!==false?{...el.box,x:el.box.x+offset.x,y:el.box.y+offset.y}:null;
-      merged.elements.push({...el,ref,key,group:localToGlobal.get(el.group)||null,list_ref:localToGlobal.get(el.list_ref)||null,owner_ref:localToGlobal.get(el.owner_ref)||null,box});
+      merged.elements.push({...el,ref,key,qid:el.qid?frameId+':'+el.qid:'',group:localToGlobal.get(el.group)||null,list_ref:localToGlobal.get(el.list_ref)||null,owner_ref:localToGlobal.get(el.owner_ref)||null,box});
     }
   }
   merged.warnings=[...new Set(merged.warnings)].slice(0,30);
@@ -71,7 +71,9 @@ async function refreshEvidence(tabId,page){
       // The DOM decides only when it can actually read this control. For a
       // closed shadow root it cannot, and letting its blind `false` overwrite a
       // screenshot verdict un-verified a finished answer on every step.
-      if(observed.supported!==false){part.verified=observed.verified===true;if(part.verified)part.entered=true;}
+      if(observed.supported!==false){part.domVerified=observed.verified===true;if(part.domVerified)part.entered=true;}
+      else part.domVerified=null;                       // the DOM cannot read this control
+      settle(part);
     }
   }
   state.progress=coverage.summary();
@@ -114,6 +116,16 @@ async function browserInput(tabId,start,end){
   }
   return AssignmentVisual.input(tabId,start,end,()=>state.stopRequested);
 }
+// Two witnesses. The DOM reads the control back; the screenshot shows what the
+// student would see. With double-checking on (the default), a part is verified
+// only when both agree. Where the DOM cannot read the control at all, the
+// screenshot decides alone. A DOM `false` always wins: the value is not there.
+let doubleCheck=false;
+function settle(part){
+  if(part.domVerified===false){part.verified=false;return;}
+  if(part.domVerified===null||part.domVerified===undefined){part.verified=part.visualConfirmed===true;return;}
+  part.verified=doubleCheck?part.visualConfirmed===true:true;
+}
 async function verifyVisual(tabId,page,part,config){
   const snap=await makeSnapshot(tabId,page);
   const result=await decide(config,{screenshot:snap.screenshot,host:page.host,elements:[],text:'',phase:'verify',observation_id:snap.id,
@@ -125,11 +137,12 @@ async function verifyVisual(tabId,page,part,config){
   let matches=a.action==='verify'&&a.part_id===part.id&&a.observation_id===snap.id&&a.status==='confirmed';
   if(part.kind==='ordering')matches=matches&&JSON.stringify((a.observed_sequence||[]).map(norm))===JSON.stringify((part.sequence||[]).map(norm));
   else matches=matches&&norm(a.observed)===norm(part.answer);
-  // Independent DOM disagreement wins; do not accept a model's success claim.
-  if(part.domEvidence?.supported&&part.domEvidence.verified!==true)matches=false;
-  part.verified=matches;part.visual=true;if(matches){part.entered=true;visualFailures.delete(part.id);}else{const n=(visualFailures.get(part.id)||0)+1;visualFailures.set(part.id,n);if(n>=3)throw new Error('Visual verification failed after two recovery attempts for '+part.what+'. Inspect the field manually.');}
-  emit({kind:matches?'progress':'warn',message:(matches?'Screenshot verified: ':'Screenshot did not confirm: ')+part.what,detail:a.observed||(a.observed_sequence||[]).join(' → ')});
-  return matches;
+  part.visualConfirmed=matches;part.visual=true;settle(part);
+  if(part.verified){part.entered=true;visualFailures.delete(part.id);}
+  else if(!matches){const n=(visualFailures.get(part.id)||0)+1;visualFailures.set(part.id,n);if(n>=3)throw new Error('Visual verification failed after two recovery attempts for '+part.what+'. Inspect the field manually.');}
+  const witness=part.domVerified==null?'Screenshot':'DOM and screenshot';
+  emit({kind:part.verified?'progress':'warn',message:(part.verified?witness+' verified: ':(matches?'Screenshot agreed but the DOM does not: ':'Screenshot did not confirm: '))+part.what,detail:a.observed||(a.observed_sequence||[]).join(' → ')});
+  return part.verified;
 }
 function answering(action,page){const e=page.elements.find(e=>e.ref===action.ref);return ['fill','select','drag'].includes(action.action)||(action.action==='click'&&(['radio','checkbox','option','switch'].includes(e?.role)||(e?.role==='button'&&e?.choice)));}
 // The model said `select` but pointed at a custom menu, not a <select>. The
@@ -173,15 +186,26 @@ async function executeAction(tabId,action,page,config){
     if(selected.key===anchor.key||selected.list_ref!==anchor.list_ref||!selected.list_ref||!selected.box||!anchor.box)return {ok:false,detail:'Reorder needs two distinct items in the same visible list.'};
     const s=selected.box,t=anchor.box,start={x:s.x+s.w/2,y:s.y+s.h/2},end={x:t.x+t.w/2,y:t.y+(action.placement==='before'?2:t.h-2)};
     if(!['before','after'].includes(action.placement))return {ok:false,detail:'Specify before or after.'};
-    part.verified=false;return browserInput(tabId,start,end);
+    part.verified=false;part.visualConfirmed=false;return browserInput(tabId,start,end);
   }
   if(action.action.startsWith('visual_')){
     if(!part||!decisionSnapshot||action.observation_id!==decisionSnapshot.id)return {ok:false,detail:'Visual action lacks a planned part or current screenshot.'};
     await currentSnapshot(tabId,decisionSnapshot,page);
     const v=decisionSnapshot.viewport,p=action.point,d=action.destination;
     if(!p||![p.x,p.y,...(d?[d.x,d.y]:[])].every(n=>Number.isFinite(n)&&n>=0&&n<=1))return {ok:false,detail:'Invalid visual coordinates.'};
-    part.visual=true;if(action.purpose!=='open')part.verified=false;
-    return browserInput(tabId,{x:p.x*v.width,y:p.y*v.height},d?{x:d.x*v.width,y:d.y*v.height}:null);
+    const start={x:p.x*v.width,y:p.y*v.height},end=d?{x:d.x*v.width,y:d.y*v.height}:null;
+    // When the part's control is known, the point has to land on it -- or on
+    // the menu that control owns -- not merely somewhere in the same table.
+    // Otherwise a mis-aimed click fills a neighbouring cell and is booked to
+    // this part. For a drag the destination is what must hit the target.
+    const planned=part.target_key&&page.elements.find(e=>e.key===part.target_key);
+    if(planned?.box){
+      const boxes=[planned.box,...page.elements.filter(e=>e.owner_ref===planned.ref&&e.box).map(e=>e.box)];
+      const hits=pt=>boxes.some(b=>pt.x>=b.x-2&&pt.x<=b.x+b.w+2&&pt.y>=b.y-2&&pt.y<=b.y+b.h+2);
+      if(!hits(end||start))return {ok:false,detail:`That point is not on the control planned for "${part.what}" (ref ${planned.ref}) or its open menu. Aim at that control, or click it by ref.`};
+    }
+    part.visual=true;if(action.purpose!=='open'){part.verified=false;part.visualConfirmed=false;}
+    return browserInput(tabId,start,end);
   }
   if(action.action==='click' && selected?.opaque){
     // The page draws this box but we cannot see inside it (closed shadow root).
@@ -200,7 +224,7 @@ async function executeAction(tabId,action,page,config){
     // Relying on the model's purpose label left a chosen answer unverified.
     const opening=!part.opened&&action.purpose!=='answer';
     const b=selected.box,out=await browserInput(tabId,{x:b.x+b.w/2,y:b.y+b.h/2});
-    if(out.ok){if(opening){part.opened=true;out.preparation=true;}else{part.entered=true;part.verified=false;part.opened=false;out.needsVerification=true;out.partId=part.id;}}
+    if(out.ok){if(opening){part.opened=true;out.preparation=true;}else{part.entered=true;part.verified=false;part.visualConfirmed=false;part.opened=false;out.needsVerification=true;out.partId=part.id;}}
     return out;
   }
   if(action.action==='click' && part && (selected?.dropdown||action.purpose==='open'||(pendingMenu?.part===part.id&&selected?.role==='option'))){
@@ -219,7 +243,7 @@ async function executeAction(tabId,action,page,config){
     }
     if(selected.role==='option'&&norm(selected.name)!==norm(part.answer))return {ok:false,detail:'Option differs from the planned answer.'};
     const b=selected.box,out=await browserInput(tabId,{x:b.x+b.w/2,y:b.y+b.h/2});
-    if(selected.role==='option'){part.entered=true;part.verified=false;pendingMenu=null;out.needsVerification=true;out.partId=part.id;}
+    if(selected.role==='option'){part.entered=true;part.verified=false;part.visualConfirmed=false;pendingMenu=null;out.needsVerification=true;out.partId=part.id;}
     else out.preparation=true;
     return out;
   }
@@ -293,13 +317,18 @@ async function run(tabId){
     await compatible(await settings());
     await injectAll(tabId);emit({kind:'info',message:'Reading '+new URL(tab.url).host+' · extension '+chrome.runtime.getManifest().version});
     while(!state.stopRequested&&state.steps<SESSION_STEPS){
-      const config=await settings(),current=await chrome.tabs.get(tabId);
+      const config=await settings(),current=await chrome.tabs.get(tabId);doubleCheck=config.double_check;
       if(new URL(current.url).origin!==runOrigin)throw new Error('The tab moved to a different site. Run stopped.');
       if(!current.active)throw new Error('Select the assignment tab to continue. Run stopped before acting on another tab.');
       const page=await observeAllFrames(tabId);await refreshEvidence(tabId,page);
       if(page.warnings.length)emit({kind:'warn',message:page.warnings.join(' ')});
       const changed=page.digest!==lastDigest;lastDigest=page.digest;
-      if(stalls>=STALL_LIMIT)throw new Error('No verified progress after '+STALL_LIMIT+' attempts. Review the last action and place the answer manually.');
+      if(stalls>=STALL_LIMIT){
+        // Stalling with everything verified is not a failure: the work is done
+        // and the page simply offers nothing further to press. Say that.
+        if(coverage.questions.size&&!coverage.outstanding().length){emit({kind:'stop',message:'Every part is verified. Nothing further to press was found on this page -- no hand-in or next-question control.'});break;}
+        throw new Error('No verified progress after '+STALL_LIMIT+' attempts. Review the last action and place the answer manually.');
+      }
       decisionSnapshot=await makeSnapshot(tabId,page);
       const observation={screenshot:config.badges?await capture(tabId,page,true):decisionSnapshot.screenshot,observation_id:decisionSnapshot.id,elements:page.elements,text:page.text,host:page.host,
         step:(coverage.current?.steps||0)+1,step_budget:coverage.budget(),page_changed:changed,last_action:lastAction,
@@ -344,6 +373,7 @@ async function run(tabId){
           emit({kind:'warn',message:'No parts checklist. Proceeding: the first answer entered will be taken as the plan for this question.'});
         }
         const before=coverage.summary(),fresh=coverage.read(action,page);
+        if(coverage.revised.length){stalls++;emit({kind:'warn',message:'The plan changed an answer it had already committed. Taken once; the part must be re-entered.',detail:coverage.revised.join('; ')});}
         if(fresh){state.questions++;stalls=0;askedForParts=false;}
         else if(before===coverage.summary()&&sinceRead===0)stalls++;
         checked=true;recheck=false;navSteps=0;sinceRead=0;
@@ -366,7 +396,7 @@ async function run(tabId){
       }
       if(coverage.current&&++coverage.current.steps>coverage.budget())throw new Error('Question action budget reached. Completed parts were retained; inspect the remaining parts.');
       // Honor a switch changed while the model request was in flight.
-      if(page.elements.find(e=>e.ref===action.ref)?.control==='terminal')for(const p of coverage.current.parts.values())if(p.visual)await verifyVisual(tabId,page,p,config);
+      if(page.elements.find(e=>e.ref===action.ref)?.control==='terminal')for(const q of coverage.questions.values())for(const p of q.parts.values())if((p.visual||doubleCheck)&&!p.visualConfirmed&&p.domVerified!==false&&p.target_key)await verifyVisual(tabId,page,p,config);
       const before=coverage.summary();let outcome;
       try{outcome=await executeAction(tabId,action,page,await settings());}catch(e){if(/^Stale/.test(e.message)){recheck=true;lastAction={action:action.action,ok:false,detail:e.message};continue;}throw e;}sinceRead++;
       emit({kind:outcome.ok?'act':'warn',message:action.action+(action.ref?' ref '+action.ref:''),detail:outcome.detail});
@@ -379,9 +409,14 @@ async function run(tabId){
       // a cell whose value the content script can read has already been judged
       // by refreshEvidence above, and a second opinion from a picture adds cost
       // without adding evidence.
+      // With double-checking on, every answer the DOM accepted is also shown to
+      // the model in a fresh screenshot. A DOM rejection needs no second opinion.
       const domDecided=actedPart?.domEvidence?.supported===true;
-      if(outcome.ok&&actedPart&&(outcome.needsVerification||action.action.startsWith('visual_'))&&action.purpose!=='open'&&!domDecided)await verifyVisual(tabId,updated,actedPart,config);
-      if(outcome.ok&&actedPart?.kind==='ordering'&&!actedPart.order_keys?.length)await verifyVisual(tabId,updated,actedPart,config);
+      // One list of what counts as entering an answer, shared with the bind
+      // check: a reorder is one, and leaving it out meant an ordering part
+      // could never earn its screenshot witness and never complete.
+      const answered=outcome.needsVerification||action.action.startsWith('visual_')||action.action==='reorder'||answering(action,page);
+      if(outcome.ok&&actedPart&&answered&&action.purpose!=='open'&&(!domDecided||(doubleCheck&&actedPart.domVerified===true&&!actedPart.visualConfirmed)))await verifyVisual(tabId,updated,actedPart,config);
       const progress=before!==coverage.summary();stalls=progress?0:outcome.preparation&&landed?stalls:stalls+1;if(progress)doneRefused=false;
       state.progress=coverage.summary();emit({kind:'progress',message:state.progress});
       lastAction={action:action.action,ref:action.ref,ok:outcome.ok,detail:outcome.detail,landed};
@@ -411,6 +446,6 @@ chrome.action.onClicked.addListener(tab=>chrome.sidePanel.open({windowId:tab.win
 chrome.runtime.onInstalled.addListener(()=>chrome.sidePanel.setPanelBehavior({openPanelOnActionClick:true}).catch(()=>{}));
 // DevTools-only integration surface: not exposed to website messages or DOM.
 globalThis.__assignmentHarness={injectAll,observeAllFrames,actOnRef,executeAction,refreshEvidence,waitForEffect,capture,compatible,makeSnapshot,currentSnapshot,verifyVisual,
-  setSnapshot(s){decisionSnapshot=s;},
+  setSnapshot(s){decisionSnapshot=s;},setDoubleCheck(v){doubleCheck=!!v;},settle,
   get coverage(){return coverage;},get state(){return state;},
   reset(origin){runOrigin=origin;coverage=new AssignmentCoverage.Coverage();state.stopRequested=false;}};

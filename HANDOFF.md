@@ -1,5 +1,41 @@
 # Handoff log
 
+## 2026-09-13 — claude — Greptile PR #4 findings fixed; answers verified by DOM and screenshot (0.7.2)
+
+**Did:** Greptile scored the 0.7.1 upload 0/5 with four findings; all four were
+valid and two were regressions from my 0.7.0 smoke fixes. Fixed on
+`codex/visual-ordering`: a gesture is abandoned when the tab navigates or starts
+loading (URL checked before every debugger event, `tabs.onUpdated` cancels); a
+`visual_*` point must land on the part's own control or its menu when that
+control is known; question identity uses only *unfinished* controls and honours
+`data-question-id` taken from the plan's own container (not the first on the
+page), so a page reusing one input per question gets a new question each time;
+a closed-shadow `widget` is a candidate only inside an answer region at control
+size, so component shells no longer block hand-in. Then Dylan's request: answers
+are verified by **two witnesses** — the DOM read-back and a fresh-screenshot
+`verify` call — with a default-on panel switch; `settle()` is the one place
+`verified` is decided (DOM `false` always wins; screenshot alone where the DOM is
+blind). Also from the smoke runs: `reorder` counts as answering so an ordering
+part can earn its screenshot witness; one revision of a committed answer is
+taken and reported, the second is refused; stalling with every part verified is
+an honest stop, not an error. Extension 0.7.2.
+
+**Verified:** 174 tests. MiniMax through the loaded extension with double-check
+on: 20-cell dropdown table **20/20 confirmed by both DOM and screenshot**, every
+value correct (73 steps, $0.11); ordering 1/1 both witnesses (9 steps, $0.014);
+closed shadow root 1/1 screenshot (6 steps, $0.011).
+
+**Left undone:** The 0.7.2 backend is unchanged from 0.7.0's deploy (protocol 2,
+no server change this round), so no redeploy was needed. McGraw Hill live
+validation still needs Dylan's login. PR #4 (an upload) should be closed in
+favour of the real PR from this branch.
+
+**Watch out:** Double-checking costs one extra model call per answer — about
++15% on the 20-cell table. `refreshEvidence` no longer sets `verified` directly;
+anything that touches a part's evidence must go through `settle()`. The
+per-element `qid` is frame-prefixed in the worker exactly like `question_hint`,
+or the two never match.
+
 ## 2026-09-13 — Codex — release integration and visual guard correction (0.7.1)
 
 **Did:** Resumed after Claude's 6138d40/d369fba completion, preserving all fixes.

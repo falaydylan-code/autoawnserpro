@@ -412,7 +412,7 @@ class Observation(BaseModel):
 
 @app.get('/api/capabilities')
 async def capabilities():
-    return {'protocol': 2, 'extension': '0.7.0', 'features': ['parts', 'ordering', 'visual_input', 'visual_verification']}
+    return {'protocol': 2, 'extension': '0.7.2', 'features': ['parts', 'ordering', 'visual_input', 'visual_verification']}
 
 
 @app.post('/api/agent/step')

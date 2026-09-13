@@ -247,7 +247,7 @@ $('stop').onclick = async () => {
 $('advance').onchange = async () => {
   await chrome.storage.local.set({ advance: $('advance').checked });
 };
-for (const id of ['auto_submit', 'badges']) {
+for (const id of ['auto_submit', 'badges', 'double_check']) {
   $(id).onchange = () => chrome.storage.local.set({ [id]: $(id).checked });
 }
 
@@ -269,7 +269,7 @@ chrome.runtime.onMessage.addListener((message) => {
 });
 
 (async function boot() {
-  const stored = await chrome.storage.local.get(['backend', 'model', 'note', 'armed', 'advance', 'auto_submit', 'badges']);
+  const stored = await chrome.storage.local.get(['backend', 'model', 'note', 'armed', 'advance', 'auto_submit', 'badges', 'double_check']);
   $('backend').value = stored.backend || DEFAULT_BACKEND;
   $('model').value = stored.model || '';
   $('note').value = stored.note || '';
@@ -277,6 +277,7 @@ chrome.runtime.onMessage.addListener((message) => {
   $('advance').checked = stored.advance === true;
   $('auto_submit').checked = stored.auto_submit === true;
   $('badges').checked = stored.badges !== false;
+  $('double_check').checked = stored.double_check !== false;
   await refreshPage();
   const held = await accessGranted('<all_urls>');
   if (armed && !held) {

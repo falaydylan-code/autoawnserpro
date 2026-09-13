@@ -16,26 +16,35 @@
   class Coverage {
     constructor() { this.questions = new Map(); this.current = null; this.history = []; }
     read(action, page) {
-      const id = questionId(action.question, page.question_hint);
+      this.revised = [];
+      // The page's own question id, taken from the container of the controls
+      // this plan points at -- not the first one on the page, which on a
+      // multi-question page made every read hash to the same question.
+      const qids = [...new Set((action.parts || []).map(p => page.elements.find(e => e.ref === p.ref)?.qid).filter(Boolean))];
+      const hint = qids.length === 1 ? qids[0] : (qids.length ? '' : page.question_hint);
+      const id = questionId(action.question, hint);
       let fresh = !this.questions.has(id);
       // A changed Part tab is not a new question. Keep the ledger while any
       // previously seen tabs still occur, even if the model rephrases the stem.
       if (this.current && page.part_tabs?.some(t => this.current.tabs.has(t.key))) fresh = false;
       // Nor is a rephrased stem. The answer controls are the question's real
-      // identity: if the incoming parts point at controls the current plan
-      // already owns, or the current plan's controls are all still on screen
-      // with work left on them, this is the same question re-read. Treating
-      // it as new orphaned a correct twenty-cell plan for a seven-cell one.
+      // identity -- but only the controls with work still on them. A page that
+      // reuses one input for every question (MathPapa does) must not fold the
+      // next question into a finished one: that adopted the old part, tripped
+      // the plan-change guard and killed the run. And when the page names its
+      // questions (data-question-id), a different name is a different question
+      // whatever the controls say.
       if (fresh && this.current && this.current.parts.size) {
-        const owned = new Set([...this.current.parts.values()].map(p => p.target_key).filter(Boolean));
+        const namedDifferently = hint && this.current.hint && hint !== this.current.hint;
+        const unfinished = [...this.current.parts.values()].filter(p => !p.verified);
+        const owned = new Set(unfinished.map(p => p.target_key).filter(Boolean));
         const incomingKeys = (action.parts || []).map(p => page.elements.find(e => e.ref === p.ref)?.key).filter(Boolean);
         const onScreen = new Set(page.elements.map(e => e.key));
         const overlap = incomingKeys.some(k => owned.has(k));
-        const stillHere = owned.size > 0 && [...owned].every(k => onScreen.has(k))
-          && [...this.current.parts.values()].some(p => !p.verified);
-        if (overlap || stillHere) fresh = false;
+        const stillHere = owned.size > 0 && [...owned].every(k => onScreen.has(k));
+        if (!namedDifferently && (overlap || stillHere)) fresh = false;
       }
-      let q = fresh ? {id, text:action.question, plan:action.plan || '', parts:new Map(), tabs:new Map(), steps:0, submitted:false} :
+      let q = fresh ? {id, text:action.question, hint, plan:action.plan || '', parts:new Map(), tabs:new Map(), steps:0, submitted:false} :
         (this.questions.get(id) || this.current);
       if (fresh) this.questions.set(id, q);
       this.current = q;
@@ -66,8 +75,18 @@
           // the other, before entry, is a refinement and is kept.
           const a=normalize(prev.answer), b=normalize(incoming.answer);
           const refinement=!prev.entered && (a.includes(b) || b.includes(a));
-          if (!refinement) throw new Error(`Plan changed for ${prev.what}: "${prev.answer}" to "${incoming.answer}". Stop and review before replacing a committed answer.`);
-          prev.answer=incoming.answer; prev.refined=true;
+          if (refinement) { prev.answer=incoming.answer; prev.refined=true; }
+          else if ((prev.revisions||0) >= 1) {
+            // Twice is the model changing its mind back and forth. Stop.
+            throw new Error(`Plan changed again for ${prev.what}: "${prev.answer}" to "${incoming.answer}". Stop and review before replacing a committed answer.`);
+          } else {
+            // Once is a correction -- or a slip -- and either way one garbled
+            // field must not end a twenty-part plan. Take it, undo the part's
+            // progress so it is re-entered and re-verified, and say so loudly.
+            this.revised.push(`${prev.what}: "${prev.answer}" -> "${incoming.answer}"`);
+            prev.answer=incoming.answer; prev.revisions=(prev.revisions||0)+1;
+            prev.entered=false; prev.verified=false; prev.visualConfirmed=false; prev.domVerified=undefined; prev.evidence=null;
+          }
         }
         const part = prev || {...incoming, entered:false, verified:false, target_key:'', evidence:null};
         if(incoming.kind!=='ordering'&&(incoming.order?.length||(incoming.sequence?.length>=2&&target&&!answerTarget(target))))incoming={...incoming,kind:'ordering'};
