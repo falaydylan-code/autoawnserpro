@@ -39,14 +39,15 @@ def test_select_naming_the_cell_and_option_text_resolves_to_that_option(extensio
       const r=await h.executeAction(id,{action:'select',ref:cell.ref,option:'Liability',part_id:'a'},p,{});await h.refreshEvidence(id,await h.observeAllFrames(id));return r;}''', tid)
     assert out['ok'], out
     assert page.locator('#cell_0_0').inner_text() == 'Liability'
-    # and a wrong option name is refused rather than guessed
-    page.evaluate('document.getElementById("cell_1_0").click()')
+    # and a wrong option name against an OPEN menu is refused with the real
+    # choices, rather than guessed
     w.evaluate('''async id=>{const h=__assignmentHarness,p=await h.observeAllFrames(id),cell=p.elements.find(e=>e.key.endsWith('#cell_1_0'));
       h.coverage.read({question:'Classify accounts',parts:[{id:'a',what:'Accounts Payable Account Type',answer:'Liability',ref:p.elements.find(e=>e.key.endsWith('#cell_0_0')).ref},{id:'b',what:'Common Stock Account Type',answer:'Equity',ref:cell.ref}]},p);
       await h.executeAction(id,{action:'click',ref:cell.ref,part_id:'b',purpose:'open'},p,{});}''', tid)
+    assert page.locator('ul[role=listbox] li').count() == 5, 'the menu is open'
     refused = w.evaluate('''async id=>{const h=__assignmentHarness,p=await h.observeAllFrames(id),cell=p.elements.find(e=>e.key.endsWith('#cell_1_0'));
       return h.executeAction(id,{action:'select',ref:cell.ref,option:'Equity',part_id:'b'},p,{});}''', tid)
-    assert not refused['ok'], refused
+    assert not refused['ok'] and 'No option "Equity"' in refused['detail'] and "Stockholders' Equity" in refused['detail'], refused
 
 
 def test_sharpening_an_unentered_answer_to_the_visible_label_is_a_refinement_not_a_change(extension):
@@ -56,18 +57,18 @@ def test_sharpening_an_unentered_answer_to_the_visible_label_is_a_refinement_not
     refined = plan_ap_type(w, tid, "Stockholders' Equity")
     assert refined['answer'] == "Stockholders' Equity"
     assert w.evaluate('__assignmentHarness.coverage.questions.size') == 1
-    # a genuinely different answer is a revision: taken once, reported, refused the second time
+    # a not-yet-entered answer may change freely: the model is still deciding
     message = w.evaluate('''async id=>{const h=__assignmentHarness,p=await h.observeAllFrames(id);
       const read=a=>h.coverage.read({question:'Classify accounts',parts:[{id:'a',what:'Accounts Payable Account Type',answer:a,ref:p.elements.find(e=>e.key.endsWith('#cell_0_0')).ref}]},p);
-      read('Asset');const once=[...h.coverage.revised];
-      try{read('Revenue');return {once,twice:'accepted'};}catch(e){return {once,twice:e.message};}}''', tid)
-    assert message['once'] and 'Plan changed again' in message['twice']
+      read('Asset');read('Revenue');read('Liability');
+      return {revised:h.coverage.revised.length,answer:h.coverage.ledger()[0].answer};}''', tid)
+    assert message['revised'] == 0 and message['answer'] == 'Liability', message
 
 
 def test_a_change_after_entry_resets_the_part_and_a_second_change_is_refused(extension):
-    """Once a value is entered, changing it is taken once -- the part goes back to
-    unentered so it is re-entered and re-verified -- and refused the second time.
-    Changing back and forth is the oscillation this guard exists for."""
+    """Before entry the answer may change freely. Once a value has been entered,
+    changing it is taken once -- the part goes back to unentered -- and refused
+    the second time. Changing back and forth is the oscillation guard."""
     page, w, tid = navigate(extension, 'custom_dropdowns.html')
     plan_ap_type(w, tid, 'Liability')
     w.evaluate('''async id=>{const h=__assignmentHarness,p=await h.observeAllFrames(id),cell=p.elements.find(e=>e.key.endsWith('#cell_0_0'));

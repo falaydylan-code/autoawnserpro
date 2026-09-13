@@ -1,5 +1,66 @@
 # Handoff log
 
+## 2026-09-13 — claude — 0.8.0: real browser input, page states, whole-assignment run
+
+**Did:** The finalizing rebuild. Every interaction is now real browser input via
+`chrome.debugger`/CDP in `extension/visual.js` (pointer, click, dblclick, drag,
+wheel, type, keys+modifiers); the DOM only finds controls and reads them back.
+The run is bound to the Start tab and continues while other tabs are in front
+(a heartbeat keeps the MV3 worker alive). Custom-dropdown binding is fixed: an
+option is accepted whenever DOM ownership ties it to the planned cell, with or
+without the worker's own pendingMenu, and opening via the separate arrow button
+counts (`trigger`/`owner_ref`). Graphs and closed widgets are driven from the
+screenshot, checked against the current screen. Page state (answering /
+editable_feedback / locked / loading / complete) is detected in `content.js`;
+locked feedback retires unfinished parts without calling them correct and
+follows Next, editable feedback allows a retry. The fixed step ceiling is gone —
+a run goes until complete / Stop / spend limit / a bounded retry (6 no-progress,
+3 same-failure, flip-flop, 4 self-changes) runs out. Backend is protocol 3;
+`select` is keyboard-driven for native dropdowns, `press` takes modifier chords,
+`look`/`hover`/`dblclick`/`scroll_to` added. New Setup control: a spend limit
+(default $2). Extension 0.8.0.
+
+**Verified:** 188 tests, ~20 new in `tests/test_finalize.py` (dropdown table with
+menus outside it + arrow triggers + no-pendingMenu binding + wrong-owner refusal;
+three graph points placed by screenshot drag and confirmed from the page; an
+already-correct order; locked feedback retiring + advancing; editable feedback
+retry; a background-tab run clicking and typing correctly; closing the tab ends
+input; a long 18-question assignment run to completion with no ceiling; a stuck
+run stopping under the spend/stall guards). MiniMax through the loaded extension
+on the 20-cell dropdown table: reached **20/20 verified, every value correct**;
+a later run hit 18/20 then stopped cleanly when the model dithered on the last
+two — model variance, harness failing safe. Backend deployed to Railway;
+`/api/capabilities` returns protocol 3.
+
+**Left undone:** MiniMax is the ceiling on the hardest cases (graph pixel math,
+end-of-table dithering); `../model-eval` is where a stronger model gets chosen.
+Live McGraw Hill validation still needs Dylan's login. The graph and
+editable-feedback fixtures are my reading of those shapes, not the real sites.
+
+**Watch out:** `chrome.debugger` shows Chrome's "debugging" bar on the tab and
+one debugger per tab, so DevTools open on the assignment tab blocks a run (clear
+error). Everything an answer touches sets `everEntered`; the oscillation guard
+only bites an answer that was actually entered — before entry the model may
+re-plan freely (a weaker model reasoning toward the right answer). `visual.js`
+was proven against a background tab; do not assume a new CDP command works there
+without checking. Deploy backend and extension together; 0.8.0 refuses a
+non-protocol-3 backend.
+
+## 2026-09-13 - Codex - supplied extension logo
+
+**Did:** Copied user-supplied PNG unchanged into extension/icons/logo.png; wired manifest toolbar/management icons and sidebar header.
+**Verified:** Manifest JSON parses and all declared icon paths exist. Chrome scales the original PNG to each requested size.
+**Left undone:** Chrome extension reload by user.
+**Watch out:** Original image preserved without image editing.
+
+## 2026-09-13 - Codex - sidebar reference redesign
+
+**Did:** Restyled sidepanel HTML/CSS/JS to the supplied purple/light reference, with ready/working presentation, live parts progress, separate settings view, persistent log/cost display preferences. Preserved all existing IDs, ETH, Stop, configuration and raw/copy logs. No fake Pause control; worker has no pause operation.
+**Verified:** Headless Chromium smoke with mocked Chrome APIs: settings, setup, start/stop enabled state, progress, 320px and 390px overflow, no JS errors; node syntax check. Inspected rendered screenshot. No live assignment or backend changes.
+**Left undone:** User reload of unpacked extension. These changes are local, not published.
+**Watch out:** This is presentation only; it does not implement the separate requested harness changes or alter backend protocol/version.
+
+
 ## 2026-09-13 — claude — PR #5 reviewed to 5/5; published to awnseragent2.0
 
 **Did:** Opened PR #5 (`codex/visual-ordering` → `main`) as the real PR for

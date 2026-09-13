@@ -1,6 +1,6 @@
 /* Observation and bounded DOM actions. No model credentials or strategy here. */
 (() => {
-  const VERSION = '0.7.2';
+  const VERSION = '0.8.0';
   if (window.__assignmentLabContent === VERSION) return;
   window.__assignmentLabContent = VERSION;
   let refs = new Map(), previousKeys = new Set(), cancelled = false;
@@ -11,11 +11,17 @@
   const TARGETS = '[data-rbd-droppable-id],.ui-droppable,[aria-dropeffect]';
   const DROPDOWNS = '[aria-haspopup=listbox],[role=combobox],td.dropDownList,td[dropdowntype],td.responseCell[tabindex]';
   const LISTS = '[data-rbd-droppable-id],[data-sortable],ol,[role=list],[role=listbox]';
+  // The arrow/button a courseware dropdown cell uses to open its menu. It is a
+  // separate element from the cell, and the cell is what the answer lives in.
+  const TRIGGERS = 'input.dropdownButton,.dropdownButton,.dropdown-arrow,[class*=arrow][role=button],[aria-haspopup=listbox]:not(td),[aria-haspopup=true]:not(td):not([role=tab])';
+  // Graph surfaces the model may have to drag on, and points drawn as SVG.
+  const GRAPHS = 'canvas,svg';
+  const POINTS = 'svg circle,svg [data-point],svg .point,svg [class*=handle]';
   const GROUPS = 'fieldset,table,[role=group],[role=radiogroup],[role=grid],[role=listbox],[role=tablist],[role=tabpanel],[data-question-id],main,section,form';
   const INTERACTIVE = ['input','textarea','select','button','a[href]','[contenteditable]',
     '[role=button]','[role=radio]','[role=checkbox]','[role=textbox]','[role=combobox]',
     '[role=link]','[role=gridcell]','[role=cell]','[role=option]','[role=listbox]',
-    '[role=tab]','[role=switch]','[role=spinbutton]','[role=slider]','[tabindex]:not([tabindex="-1"])','[aria-haspopup]',DROPDOWNS,LISTS,SOURCES,TARGETS].join(',');
+    '[role=tab]','[role=switch]','[role=spinbutton]','[role=slider]','[tabindex]:not([tabindex="-1"])','[aria-haspopup]',DROPDOWNS,LISTS,SOURCES,TARGETS,TRIGGERS,GRAPHS,POINTS].join(',');
   const FORBIDDEN_INPUT_TYPES = new Set(['password','hidden','file','image']);
   const SENSITIVE_HINT = /pass|card|cvv|cvc|ssn|social.?security|credit|iban|routing|account.?number/i;
   const HANDS_IN = /\b(?:submit\s+(?:the\s+)?(?:assignment|quiz|test|exam|work|attempt)|exit\s+assignment|finish\s+(?:assignment|attempt|quiz|test|exam)|hand\s+in|turn\s+in)\b/i;
@@ -74,6 +80,8 @@
   function role(el) {
     if(el.getAttribute('role')) return el.getAttribute('role');
     if(el.localName.includes('-')&&!el.shadowRoot) return 'widget';
+    if(el.matches(POINTS)) return 'point';
+    if(el.matches(GRAPHS)) return 'graph';
     if(editable(el)) return 'textbox';
     if(el.tagName==='INPUT') return el.type;
     if(el.tagName==='A') return 'link';
@@ -191,11 +199,21 @@
       let group=parent(el);while(group&&!local.has(group))group=parent(group);
       let depth=0;for(let n=group;n;n=parent(n))if(local.has(n))depth++;
       const rect=el.getBoundingClientRect(), k=key(el);
-      const ownerId=closest(el,'[role=listbox]')?.getAttribute('aria-labelledby');
-      const menuOwner=ownerId?chosen.find(n=>n.id===ownerId):chosen.find(n=>n!==el&&n.matches(DROPDOWNS)&&clean(n.getAttribute('aria-label'))===clean(el.getAttribute('aria-label'))&&clean(el.getAttribute('aria-label')));
+      // Who owns this element, as a dropdown relationship:
+      //  - an option's owner is the cell whose menu it is in (aria-labelledby on
+      //    the listbox, aria-controls on the cell's trigger, or a matching label);
+      //  - a trigger's (arrow button's) owner is the dropdown cell around it, so
+      //    opening through the arrow is the same as opening through the cell.
+      const menuEl=closest(el,'[role=listbox],[role=menu]');
+      const ownerId=menuEl?.getAttribute('aria-labelledby')||menuEl?.getAttribute('data-owner');
+      const controlledBy=menuEl?.id?chosen.find(n=>n!==el&&(n.getAttribute('aria-controls')||'').split(/\s+/).includes(menuEl.id)):null;
+      let menuOwner=ownerId?chosen.find(n=>n.id===ownerId):(controlledBy?(closest(parent(controlledBy),DROPDOWNS)||controlledBy):null);
+      if(!menuOwner&&menuEl){const lbl=clean(menuEl.getAttribute('aria-label')||el.getAttribute('aria-label'));if(lbl)menuOwner=chosen.find(n=>n!==el&&n.matches(DROPDOWNS)&&clean(n.getAttribute('aria-label'))===lbl);}
+      if(!menuOwner&&el.matches(TRIGGERS)&&!el.matches(DROPDOWNS)){const cell=closest(parent(el),DROPDOWNS);if(cell)menuOwner=cell;}
+      const expanded=el.getAttribute('aria-expanded')==='true'||!!el.querySelector?.('[aria-expanded=true]');
       return {ref,key:k,group:local.get(group)||null,depth:Math.min(depth,20),role:role(el),
         name:accessibleName(el).slice(0,400),...blankContext(el),...tableContext(el),
-        dropdown:el.matches(DROPDOWNS),opaque:opaque(el),qid:closest(el,'[data-question-id]')?.getAttribute('data-question-id')||'',
+        dropdown:el.matches(DROPDOWNS),trigger:el.matches(TRIGGERS)&&!el.matches(DROPDOWNS),expanded,opaque:opaque(el),qid:closest(el,'[data-question-id]')?.getAttribute('data-question-id')||'',
         owner_ref:local.get(menuOwner)||null,
         list_ref:local.get(closest(parent(el),LISTS))||null,
         order_index:closest(parent(el),LISTS)?listItems(closest(parent(el),LISTS)).indexOf(el):null,
@@ -206,12 +224,40 @@
         box:{x:Math.round(rect.x),y:Math.round(rect.y),w:Math.round(rect.width),h:Math.round(rect.height)}};
     });
     previousKeys=new Set(elements.map(e=>e.key));
+    const state=pageState(elements,nodes);
     const pageText=nodes.filter(n=>n.matches('p,legend,h1,h2,h3,output,[role=status],[role=alert]')&&visible(n)).map(text).join('\n');
     const question=nodes.find(n=>visible(n)&&n.matches('[data-question-id]'));
     return {elements,warnings,text:(pageText+'\n'+(document.body?.innerText||'')).slice(0,20000),host:location.host,title:document.title,
       origin:location.origin,frameOffset:frameOffset(),digest:digest(),fingerprint:JSON.stringify(fingerprint()),
       question_hint:question?question.getAttribute('data-question-id'):'',
+      page_state:state.state,feedback:state.feedback,attempts_left:state.attempts_left,
       part_tabs:elements.filter(e=>e.role==='tab').map(e=>({key:e.key,name:e.name,checked:e.checked}))};
+  }
+  // What kind of screen this is, from what is actually on it. Answering is the
+  // default; the others are only claimed on evidence the page gives.
+  const FEEDBACK_ZONES='output,[role=status],[role=alert],[class*=feedback],[class*=result],[class*=correct],[class*=grade],[id*=feedback],[id*=result]';
+  const FEEDBACK_RE=/your answer\s*:?\s*(?:is\s*)?(?:correct|incorrect)|\b(?:correct|incorrect)\b\s*[!.]|that(?:'s| is) (?:right|wrong)|not quite|try again|\d+\s*(?:\/|out of)\s*\d+\s*(?:points?|marks?)/i;
+  const COMPLETE_RE=/assignment (?:is )?(?:complete|submitted)|you have (?:completed|finished|submitted)|(?:final|your|total) score|thank you for (?:completing|submitting)|no more questions|end of (?:assignment|quiz)/i;
+  const RETRY_RE=/^(?:try again|retry|check again|re-?attempt|attempt again)$/i;
+  function pageState(elements,nodes){
+    const answerable=elements.filter(e=>['textbox','radio','checkbox','select','option','combobox','spinbutton','switch'].includes(e.role)||e.dropdown||e.drag==='target'||e.choice||e.opaque||e.role==='point');
+    const enabled=answerable.filter(e=>!e.disabled);
+    const zones=nodes.filter(n=>n.matches(FEEDBACK_ZONES)&&visible(n)).map(text).filter(Boolean).join(' | ');
+    const body=(document.body?.innerText||'').slice(0,20000);
+    const busy=document.readyState!=='complete'||nodes.some(n=>visible(n)&&(n.getAttribute('aria-busy')==='true'||n.matches('[class*=spinner],[class*=loading],progress:not([value])')));
+    const attempts=body.match(/(\d+)\s*(?:attempts?|tries)\s*(?:remaining|left)/i);
+    const attempts_left=attempts?Number(attempts[1]):null;
+    const fb=zones.match(FEEDBACK_RE)||(zones?null:body.match(/your answer\s*:?\s*(?:is\s*)?(?:correct|incorrect)/i));
+    const feedback=fb?fb[0].slice(0,120):'';
+    let state='answering';
+    if(busy&&!answerable.length)state='loading';
+    else if(COMPLETE_RE.test(zones||body)&&!enabled.length)state='complete';
+    else if(feedback){
+      const retryControl=elements.find(e=>RETRY_RE.test(e.name||''));
+      const retry=!!retryControl&&!retryControl.disabled;
+      state=(retry||(enabled.length&&attempts_left!==0))?'editable_feedback':'locked';
+    }
+    return {state,feedback,attempts_left};
   }
   let badgeHost=null;
   function badgesOff(){badgeHost?.remove();badgeHost=null;}
@@ -496,7 +542,10 @@
     else supported=false;
     return {visible:true,verified,supported,actual:clean(actual).slice(0,1000)};
   }
-  function visualGuard(point) {
+  // `region` is for points the model invented from a screenshot: they must land
+  // in an answer area. A point derived from a DOM element's own box already
+  // names its target, so only the safety half applies to it.
+  function visualGuard(point, region=true) {
     let doc=document,x=point.x,y=point.y,el;
     for(let depth=0;depth<12;depth++) {
       el=doc.elementFromPoint(x,y);if(!el)return {ok:false,detail:'No visible target at that point.'};
@@ -513,23 +562,41 @@
     }
     const label=clean(el.getAttribute('aria-label'));
     const owner=label&&[...doc.querySelectorAll(DROPDOWNS)].find(n=>clean(n.getAttribute('aria-label'))===label);
-    const region=closest(el,'table,[role=listbox],[role=list],ol,[data-sortable],[data-rbd-droppable-id]')||(owner&&closest(owner,'table'));
-    if(!region)return {ok:false,detail:'Point is outside a recognized answer table, menu or ordering list.'};
+    if(!region)return {ok:true};
+    const area=closest(el,'table,[role=listbox],[role=list],ol,[data-sortable],[data-rbd-droppable-id],canvas,svg,fieldset,form,[role=group],[data-question-id]')||(owner&&closest(owner,'table'));
+    if(!area)return {ok:false,detail:'Point is outside a recognized answer area (table, menu, list, graph or question).'};
     return {ok:true};
   }
   window.__assignmentLab={observe,act,hideUI,moveTo,pressEffect,describe,badges,badgesOff,verify,digest,visualGuard,cursorHeld:()=>!!ui?.dot.classList.contains('held')};
   if(!globalThis.chrome?.runtime?.onMessage)return;
   chrome.runtime.onMessage.addListener((message,_sender,reply)=>{
     if(message.type==='observe'){reply(observe());return true;}
+    if(message.type==='reveal'){                         // scroll a ref into view, return its fresh box
+      const el=refs.get(Number(message.ref));
+      if(!el?.isConnected){reply({ok:false,detail:'That element is no longer on the page.'});return true;}
+      el.scrollIntoView({block:'center',inline:'center',behavior:'instant'});
+      setTimeout(()=>{const r=el.getBoundingClientRect();reply({ok:true,box:{x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height)},visible:visible(el),tag:el.tagName,disabled:el.disabled===true||el.getAttribute('aria-disabled')==='true',focused:document.activeElement===el,value:valueOf(el).slice(0,300),options:el.tagName==='SELECT'?[...el.options].map(o=>o.text.trim()).slice(0,60):undefined});},80);
+      return true;
+    }
+    if(message.type==='focus'){const el=refs.get(Number(message.ref));if(el?.isConnected){el.focus();reply({ok:document.activeElement===el});}else reply({ok:false});return true;}
+    if(message.type==='scrollpos'){const el=message.ref?refs.get(Number(message.ref)):null;reply(el?{top:el.scrollTop,left:el.scrollLeft,max:el.scrollHeight-el.clientHeight}:{top:scrollY,left:scrollX,max:document.documentElement.scrollHeight-innerHeight});return true;}
+    if(message.type==='domscroll'){const el=message.ref?refs.get(Number(message.ref)):null;(el||window).scrollBy({top:message.dy||0,left:message.dx||0,behavior:'instant'});reply({ok:true});return true;}
+    if(message.type==='cursor'){                          // mirror the browser pointer with the visible green cursor
+      const u=ensureUI();u.dot.classList.add('on');if(message.label!=null){u.tag.textContent=message.label;u.tag.classList.add('on');}
+      u.dot.classList.toggle('held',!!message.held);place(message.x,message.y,!!message.instant);reply({ok:true});return true;
+    }
+    if(message.type==='landed'){const src=refs.get(Number(message.ref)),dst=refs.get(Number(message.to));reply({landed:!!(src&&dst&&src.isConnected&&dst.isConnected&&landed(src,dst,text(src),message.priorText||''))});return true;}
+    if(message.type==='state'){const o=observe();reply({page_state:o.page_state,feedback:o.feedback,attempts_left:o.attempts_left});return true;}
     if(message.type==='digest'){reply({digest:digest()});return true;}
     if(message.type==='viewport'){reply({width:innerWidth,height:innerHeight,scrollX,scrollY,scale:visualViewport?.scale||1});return true;}
-    if(message.type==='visual_guard'){reply(visualGuard(message.point));return true;}
+    if(message.type==='visual_guard'){reply(visualGuard(message.point,message.region!==false));return true;}
     if(message.type==='verify'){reply(verify(message.evidence));return true;}
     if(message.type==='badges'){badges(message.entries);reply({ok:true});return true;}
     if(message.type==='badges_off'){badgesOff();reply({ok:true});return true;}
     if(message.type==='cancel'){cancelled=true;badgesOff();hideUI();reply({ok:true});return true;}
     if(message.type==='reset'){cancelled=false;reply({ok:true});return true;}
     if(message.type==='cursor_off'){hideUI();badgesOff();reply({ok:true});return true;}
+    if(message.type==='hide_cursor'){hideUI();reply({ok:true});return true;}
     if(message.type==='act'){act(message.action,message.permit||{}).then(reply).catch(e=>reply({ok:false,detail:e.message}));return true;}
     return false;
   });

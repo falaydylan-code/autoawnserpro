@@ -20,6 +20,7 @@ def test_debugger_attach_failure_is_a_clear_stop_not_a_silent_no_op(extension):
     result = w.evaluate('''async ({id,point})=>{const h=__assignmentHarness,p=await h.observeAllFrames(id);
       h.coverage.read({question:'Classify',parts:[{id:'a',what:'Type',answer:'Liability',ref:null}]},p);
       const snap=await h.makeSnapshot(id,p);h.setSnapshot(snap);
+      await AssignmentVisual.detach();                 // the run attaches at start; model the attach itself failing
       const real=chrome.debugger.attach;chrome.debugger.attach=async()=>{throw new Error('Another debugger is already attached');};
       try{return await h.executeAction(id,{action:'visual_click',purpose:'open',part_id:'a',observation_id:snap.id,point},p,{});}
       catch(e){return {threw:e.message};}finally{chrome.debugger.attach=real;}}''', {'id': tid, 'point': point})
@@ -47,9 +48,11 @@ def test_a_dropdown_selection_that_does_not_persist_is_not_verified(extension):
     """The page accepted the click but threw the value away. Only what the cell
     actually shows counts, so the part stays unverified and outstanding."""
     page, w, tid = navigate(extension, 'custom_dropdowns.html')
-    # make cell_0_0's menu discard whatever is chosen
-    page.evaluate('''()=>{const cell=document.getElementById("cell_0_0");const orig=cell.onclick;
-      cell.onclick=()=>{orig();for(const o of document.querySelectorAll("li[role=option]"))o.onclick=()=>{document.querySelector("ul").remove();};};}''')
+    # make cell_0_0's menu discard whatever is chosen: once it opens, every
+    # option just closes the menu without writing the value
+    page.evaluate('''()=>{const cell=document.getElementById("cell_0_0");const arrow=document.getElementById("arrow_0_0");
+      const sabotage=()=>{for(const o of document.querySelectorAll("li[role=option]"))o.onclick=()=>{document.querySelector("ul").remove();cell.setAttribute("aria-expanded","false");};};
+      const origCell=cell.onclick,origArrow=arrow.onclick;cell.onclick=e=>{origCell(e);sabotage();};arrow.onclick=e=>{origArrow(e);sabotage();};}''')
     observed = w.evaluate('(id)=>__assignmentHarness.observeAllFrames(id)', tid)
     target = next(e for e in observed['elements'] if e['key'].endswith('#cell_0_0'))
     w.evaluate('(p)=>__assignmentHarness.coverage.read(p.action,p.page)',
@@ -84,4 +87,4 @@ def test_opening_a_menu_is_preparation_and_an_option_from_another_cell_is_refuse
     page.evaluate('document.getElementById("cell_0_0").click()')
     refused = w.evaluate('''async id=>{const h=__assignmentHarness,p=await h.observeAllFrames(id),option=p.elements.find(e=>e.role==='option'&&e.name==='Asset');
       return h.executeAction(id,{action:'click',ref:option.ref,part_id:'s',purpose:'answer'},p,{});}''', tid)
-    assert not refused['ok'] and 'belong to that cell' in refused['detail'], refused
+    assert not refused['ok'] and 'belongs to the cell' in refused['detail'], refused
