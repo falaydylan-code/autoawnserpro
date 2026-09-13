@@ -1,3 +1,12 @@
+> Review follow-up (2026-09-13): Greptile reviewed the real PR (#5, from this
+> branch) to **5/5 — safe to merge** at `1e4e49a`, after two rounds covering the
+> PR #4 findings (navigation mid-gesture, visual point off the planned target,
+> question identity on reused controls, decorative widgets) and three more
+> (origin release on detach, multi-question pages, focusable closed-shadow
+> hosts). Answers are now verified by both DOM read-back and a screenshot
+> witness by default. Published to `awnseragent2.0` main. Still open: McGraw
+> Hill live validation (needs Dylan's login) and the extension README.
+
 > Release follow-up (2026-09-13): Codex resumed Claude's completed implementation,
 > verified the live protocol-2 backend and prepared publication to awnseragent2.0.
 > Extension 0.7.1 corrects a visual guard that treated unrelated Submit text as

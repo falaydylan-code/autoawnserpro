@@ -1,5 +1,30 @@
 # Handoff log
 
+## 2026-09-13 — claude — PR #5 reviewed to 5/5; published to awnseragent2.0
+
+**Did:** Opened PR #5 (`codex/visual-ordering` → `main`) as the real PR for
+0.7.x — code, backend, tests and history together — and closed the upload PRs
+#2 and #4. Greptile scored it 2/5 with three findings, all valid: `detach()`
+released the mouse at (0,0) mid-drag (now at the gesture's origin); on a page
+showing several questions, "unfinished controls still on screen" merged parts
+aimed at different controls (now parts must overlap the unfinished plan; the
+screen-presence signal counts only for a plan-less re-read); a closed-shadow
+host with `tabindex` was not treated as opaque (opacity is now judged by the
+host's inside). Re-review: **5/5, safe to merge** at `1e4e49a`. Pushed the same
+commit to `awnseragent2.0` `main` as a fast-forward over Codex's 0.7.1.
+
+**Verified:** 177 tests. Each finding has a loaded-extension test that drives
+the exact sequence Greptile described.
+
+**Left undone:** Extension README still describes 0.6.x (no debugger,
+two-witness, ordering or dropdown sections) — next on the list, held on Dylan's
+"don't act on anything new yet". McGraw Hill live validation still needs his
+login. PR #5 is his to merge.
+
+**Watch out:** `gestureStart` in `visual.js` is the only record of where a
+gesture began; `detach()` depends on it. The `release` remote in this worktree
+points at `awnseragent2.0` — push there only as a fast-forward.
+
 ## 2026-09-13 — claude — Greptile PR #4 findings fixed; answers verified by DOM and screenshot (0.7.2)
 
 **Did:** Greptile scored the 0.7.1 upload 0/5 with four findings; all four were
