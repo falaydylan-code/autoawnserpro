@@ -174,7 +174,9 @@
     // blocked hand-in.
     const ANSWER_REGION='td,th,[role=gridcell],[role=cell],fieldset,form,label,[role=group],[role=radiogroup],[data-question-id]';
     const opaque=n=>{
-      if(!(n.localName.includes('-')&&!n.shadowRoot&&!n.matches(INTERACTIVE)&&!n.querySelector(INTERACTIVE)))return false;
+      // Opacity is about what is inside the host, not what is on it: a host that
+      // carries tabindex is still a closed box, and still needs a real click.
+      if(!(n.localName.includes('-')&&!n.shadowRoot&&!n.querySelector(INTERACTIVE)))return false;
       if(!closest(parent(n),ANSWER_REGION)||closest(n,'header,nav,footer,aside,[role=banner],[role=navigation],[role=contentinfo]'))return false;
       const r=n.getBoundingClientRect();return r.width>=16&&r.height>=10&&r.width<=800&&r.height<=300;
     };

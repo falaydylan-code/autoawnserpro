@@ -41,7 +41,12 @@
         const incomingKeys = (action.parts || []).map(p => page.elements.find(e => e.ref === p.ref)?.key).filter(Boolean);
         const onScreen = new Set(page.elements.map(e => e.key));
         const overlap = incomingKeys.some(k => owned.has(k));
-        const stillHere = owned.size > 0 && [...owned].every(k => onScreen.has(k));
+        // "All my unfinished controls are still on screen" only says the old
+        // question has not gone away. It cannot say the incoming parts belong
+        // to it: on a page showing several questions at once, parts aimed at
+        // entirely different controls are a different question. So that
+        // signal counts only for a read that brings no parts of its own.
+        const stillHere = incomingKeys.length === 0 && owned.size > 0 && [...owned].every(k => onScreen.has(k));
         if (!namedDifferently && (overlap || stillHere)) fresh = false;
       }
       let q = fresh ? {id, text:action.question, hint, plan:action.plan || '', parts:new Map(), tabs:new Map(), steps:0, submitted:false} :

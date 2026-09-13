@@ -164,3 +164,64 @@ def test_one_revision_is_taken_and_reported_and_the_second_stops(extension):
     assert result['first']['revised'] and 'Balance Sheet' in result['first']['revised'][0]
     assert result['first']['answer'] == 'Retained Earnings', 'the first change is taken'
     assert 'Plan changed again' in result['second'], 'the second is refused'
+
+
+# --------------------------------------------------------------------------
+# PR #5 round 1
+# --------------------------------------------------------------------------
+
+def test_detach_during_a_drag_releases_at_the_origin_not_the_page_corner(extension):
+    """Stop or ETH-off mid-drag calls detach(). It used to release at (0,0) and
+    clear the attached state, so the origin release never ran."""
+    page, w, tid = navigate(extension, 'ordering.html')
+    before = page.locator('li').all_text_contents()
+    result = w.evaluate('''async id=>{const h=__assignmentHarness,p=await h.observeAllFrames(id),ref=s=>p.elements.find(e=>e.key.endsWith('#'+s)).ref;
+      h.coverage.read({question:'Order',parts:[{id:'o',what:'Order',kind:'ordering',answer:'ordered',ref:ref('order'),order:['revenue','expense','net'].map(ref),sequence:['Revenues','Expenses','Net Income']}]},p);
+      const real=chrome.debugger.sendCommand,released=[];let moves=0;
+      chrome.debugger.sendCommand=async (t,m,params)=>{
+        if(params?.type==='mouseReleased')released.push({x:Math.round(params.x),y:Math.round(params.y)});
+        const r=await real(t,m,params);
+        if(params?.type==='mouseMoved'&&++moves===4)await AssignmentVisual.detach();   // the Stop path
+        return r;};
+      let outcome;try{outcome=await h.executeAction(id,{action:'reorder',ref:ref('net'),to:ref('expense'),placement:'after',part_id:'o'},p,{});}catch(e){outcome={threw:e.message};}
+      chrome.debugger.sendCommand=real;
+      const net=p.elements.find(e=>e.ref===ref('net')).box;
+      return {outcome,released,origin:{x:Math.round(net.x+net.w/2),y:Math.round(net.y+net.h/2)}};}''', tid)
+    assert 'threw' in result['outcome'] or not result['outcome'].get('ok'), result['outcome']
+    assert result['released'], 'the button was put up'
+    assert all(r != {'x': 0, 'y': 0} for r in result['released']), f"never at the page corner: {result['released']}"
+    assert any(abs(r['x'] - result['origin']['x']) <= 2 and abs(r['y'] - result['origin']['y']) <= 2 for r in result['released']), \
+        f"released at the origin {result['origin']}, got {result['released']}"
+    assert page.locator('li').all_text_contents() == before
+
+
+def test_on_a_multi_question_page_parts_aimed_at_other_controls_are_a_new_question(extension):
+    """mcq_buttons.html shows two questions at once. With question 7 unfinished
+    and still on screen, a read whose parts point only at question 8's box is
+    question 8 -- not more parts for question 7."""
+    page, w, tid = navigate(extension, 'mcq_buttons.html')
+    page.evaluate('for(const f of document.querySelectorAll("[data-question-id]"))f.removeAttribute("data-question-id")')
+    result = w.evaluate('''async id=>{const h=__assignmentHarness,p=await h.observeAllFrames(id);
+      const opt=p.elements.find(e=>e.key.endsWith('#optC')).ref,bal=p.elements.find(e=>e.key.endsWith('#balance')).ref;
+      h.coverage.read({question:'Which account increases when a customer pays in advance?',parts:[{id:'a',what:'option',answer:'Deferred Revenue',ref:opt}]},p);
+      h.coverage.read({question:'Enter the closing balance.',parts:[{id:'b',what:'balance',answer:'900',ref:bal}]},p);
+      const sizes=[...h.coverage.questions.values()].map(q=>q.parts.size);
+      // a plan-less re-read while question 8 is current stays on question 8
+      h.coverage.read({question:'Closing balance question',parts:[]},p);
+      return {questions:h.coverage.questions.size,sizes,currentParts:h.coverage.current.parts.size};}''', tid)
+    assert result['questions'] == 2, result
+    assert result['sizes'] == [1, 1], 'each question kept its own single part'
+    assert result['currentParts'] == 1
+
+
+def test_a_focusable_closed_shadow_host_is_still_an_opaque_widget(extension):
+    page, w, tid = navigate(extension, 'closed_dropdown.html')
+    page.evaluate('document.querySelector("answer-box").setAttribute("tabindex","0")')
+    observed = w.evaluate('(id)=>__assignmentHarness.observeAllFrames(id)', tid)
+    host = next(e for e in observed['elements'] if e['role'] == 'widget')
+    assert host['opaque'] is True, 'tabindex on the host does not make its inside visible'
+    out = w.evaluate('''async ({id,ref})=>{const h=__assignmentHarness,p=await h.observeAllFrames(id);
+      h.coverage.read({question:'Classify',parts:[{id:'a',what:'Type',answer:'Liability',ref}]},p);
+      return h.executeAction(id,{action:'click',ref,part_id:'a',purpose:'open'},p,{});}''', {'id': tid, 'ref': host['ref']})
+    assert out['ok'] and out.get('preparation'), out
+    assert 'Browser input' in out['detail'], 'routed through real mouse input, not el.click()'
