@@ -1,6 +1,6 @@
 /* Observation and bounded DOM actions. No model credentials or strategy here. */
 (() => {
-  const VERSION = '0.6.1';
+  const VERSION = '0.7.1';
   if (window.__assignmentLabContent === VERSION) return;
   window.__assignmentLabContent = VERSION;
   let refs = new Map(), previousKeys = new Set(), cancelled = false;
@@ -9,11 +9,13 @@
   const epoch = Math.random().toString(36).slice(2, 9);
   const SOURCES = '[draggable=true],[aria-grabbed],[data-rbd-draggable-id],[data-dnd-kit-id],.ui-draggable';
   const TARGETS = '[data-rbd-droppable-id],.ui-droppable,[aria-dropeffect]';
+  const DROPDOWNS = '[aria-haspopup=listbox],[role=combobox],td.dropDownList,td[dropdowntype],td.responseCell[tabindex]';
+  const LISTS = '[data-rbd-droppable-id],[data-sortable],ol,[role=list],[role=listbox]';
   const GROUPS = 'fieldset,table,[role=group],[role=radiogroup],[role=grid],[role=listbox],[role=tablist],[role=tabpanel],[data-question-id],main,section,form';
   const INTERACTIVE = ['input','textarea','select','button','a[href]','[contenteditable]',
     '[role=button]','[role=radio]','[role=checkbox]','[role=textbox]','[role=combobox]',
     '[role=link]','[role=gridcell]','[role=cell]','[role=option]','[role=listbox]',
-    '[role=tab]','[role=switch]','[role=spinbutton]','[role=slider]',SOURCES,TARGETS].join(',');
+    '[role=tab]','[role=switch]','[role=spinbutton]','[role=slider]','[tabindex]:not([tabindex="-1"])','[aria-haspopup]',DROPDOWNS,LISTS,SOURCES,TARGETS].join(',');
   const FORBIDDEN_INPUT_TYPES = new Set(['password','hidden','file','image']);
   const SENSITIVE_HINT = /pass|card|cvv|cvc|ssn|social.?security|credit|iban|routing|account.?number/i;
   const HANDS_IN = /\b(?:submit\s+(?:the\s+)?(?:assignment|quiz|test|exam|work|attempt)|exit\s+assignment|finish\s+(?:assignment|attempt|quiz|test|exam)|hand\s+in|turn\s+in)\b/i;
@@ -71,6 +73,7 @@
   }
   function role(el) {
     if(el.getAttribute('role')) return el.getAttribute('role');
+    if(el.localName.includes('-')&&!el.shadowRoot) return 'widget';
     if(editable(el)) return 'textbox';
     if(el.tagName==='INPUT') return el.type;
     if(el.tagName==='A') return 'link';
@@ -116,7 +119,7 @@
     let headings=[];
     for(let i=0;i<ri;i++) {const h=grid[i]?.[ci];if(h?.tagName==='TH' && h.getAttribute('scope')!=='row' && text(h)) headings.push(text(h));}
     const explicit=(cell.getAttribute('headers')||'').split(/\s+/).map(id=>table.getRootNode().getElementById?.(id)).filter(Boolean);
-    if(explicit.length) headings=explicit.filter(h=>h.scope!=='row').map(text);
+    if(explicit.length) headings=explicit.filter(h=>h.scope!=='row'&&!h.classList.contains('rowHeader')).map(text);
     return {row:row.slice(0,300),column:[...new Set(headings)].join(' / ').slice(0,300)};
   }
   function blankContext(el) {
@@ -145,6 +148,7 @@
     return {x:Math.round(x),y:Math.round(y),exact};
   }
   function valueOf(el) {
+    if(el.matches(DROPDOWNS)&&el.tagName!=='SELECT')return clean(el.getAttribute('data-value') || el.getAttribute('aria-valuetext') || el.innerText);
     if(el.matches(TARGETS)) return [...el.querySelectorAll(SOURCES)].map(text).join(' | ') || text(el);
     return clean(el.isContentEditable ? el.textContent : el.value);
   }
@@ -152,12 +156,18 @@
     return all().filter(n=>!sensitive(n)&&(n.matches(INTERACTIVE)||n.matches(GROUPS))).map(n=>
       [key(n),parent(n)?key(parent(n)):'',parent(n)?[...parent(n).children].indexOf(n):0,text(n).slice(0,30),valueOf(n),n.checked||n.getAttribute('aria-checked')==='true',n.getAttribute('aria-selected'),visible(n)]);
   }
-  function digest() {return JSON.stringify(fingerprint());}
+  function digest() {return JSON.stringify([innerWidth,innerHeight,scrollX,scrollY,visualViewport?.scale,fingerprint()]);}
+  function listItems(list) {
+    return all().filter(n=>list.contains(n)&&n!==list&&n.matches(SOURCES+',li,[role=listitem]')&&visible(n))
+      .filter(n=>!closest(parent(n),SOURCES+',li,[role=listitem]') || !list.contains(closest(parent(n),SOURCES+',li,[role=listitem]')))
+      .sort((a,b)=>{const x=a.getBoundingClientRect(),y=b.getBoundingClientRect();return Math.abs(x.top-y.top)>4?x.top-y.top:x.left-y.left;});
+  }
   function observe() {
     hideUI();refs=new Map();
     const nodes=all(), warnings=[];
     if(nodes.some(n=>n.localName.includes('-')&&!n.shadowRoot)) warnings.push('Some custom elements expose no open shadow root; closed shadow contents cannot be inspected or reliably detected. Use the screenshot; pause if required controls are missing.');
-    const interactive=nodes.filter(n=>n.matches(INTERACTIVE)&&visible(n)&&!sensitive(n)&&(!n.hasAttribute('contenteditable')||n.isContentEditable||n.matches('input,textarea,button,select,[role]')));
+    const opaque=n=>n.localName.includes('-')&&!n.shadowRoot&&!n.matches(INTERACTIVE)&&!n.querySelector(INTERACTIVE);
+    const interactive=nodes.filter(n=>((n.matches(INTERACTIVE)&&(!n.hasAttribute('contenteditable')||n.isContentEditable||n.matches('input,textarea,button,select,[role]')))||opaque(n))&&visible(n)&&!sensitive(n));
     const selected=new Set(interactive);
     for(const el of interactive) for(let n=parent(el);n;n=parent(n)) if(n.matches(GROUPS))selected.add(n);
     const ordered=nodes.filter(n=>selected.has(n));
@@ -168,8 +178,14 @@
       let group=parent(el);while(group&&!local.has(group))group=parent(group);
       let depth=0;for(let n=group;n;n=parent(n))if(local.has(n))depth++;
       const rect=el.getBoundingClientRect(), k=key(el);
+      const ownerId=closest(el,'[role=listbox]')?.getAttribute('aria-labelledby');
+      const menuOwner=ownerId?chosen.find(n=>n.id===ownerId):chosen.find(n=>n!==el&&n.matches(DROPDOWNS)&&clean(n.getAttribute('aria-label'))===clean(el.getAttribute('aria-label'))&&clean(el.getAttribute('aria-label')));
       return {ref,key:k,group:local.get(group)||null,depth:Math.min(depth,20),role:role(el),
         name:accessibleName(el).slice(0,400),...blankContext(el),...tableContext(el),
+        dropdown:el.matches(DROPDOWNS),opaque:opaque(el),
+        owner_ref:local.get(menuOwner)||null,
+        list_ref:local.get(closest(parent(el),LISTS))||null,
+        order_index:closest(parent(el),LISTS)?listItems(closest(parent(el),LISTS)).indexOf(el):null,
         drag:el.matches(SOURCES)?'source':el.matches(TARGETS)?'target':null,
         control:classification(el),external:external(el),choice:isChoice(el),value:valueOf(el).slice(0,1000),
         checked:el.checked===true||['aria-checked','aria-selected','aria-pressed'].some(a=>el.getAttribute(a)==='true'),
@@ -441,8 +457,17 @@
     if(!el || !visible(el))return {visible:false,verified:false};
     if(sensitive(el))return {visible:true,verified:false};
     const expected=clean(evidence.answer).toLowerCase();
-    let actual=valueOf(el),verified=false;
-    if(evidence.kind==='drag')verified=expected.length>0&&[...el.querySelectorAll(SOURCES)].some(s=>text(s).toLowerCase()===expected&&(!evidence.source_key||key(s)===evidence.source_key));
+    // `supported` means a branch below actually judged this control. Only a
+    // control nothing here can read -- a closed shadow host, a canvas -- is
+    // unsupported, and for those the screenshot verdict stands instead.
+    let actual=valueOf(el),verified=false,supported=true;
+    if(evidence.kind==='ordering') {
+      const items=listItems(el);const actualKeys=items.map(key);
+      verified=!!evidence.order_keys?.length && JSON.stringify(actualKeys)===JSON.stringify(evidence.order_keys);
+      return {visible:true,verified,supported:!!evidence.order_keys?.length,actual:items.map(text).join(' | '),sequence:items.map(text),method:'dom-order'};
+    }
+    else if(el.matches(DROPDOWNS)&&el.tagName!=='SELECT')verified=!!expected&&clean(actual).toLowerCase()===expected;
+    else if(evidence.kind==='drag')verified=expected.length>0&&[...el.querySelectorAll(SOURCES)].some(s=>text(s).toLowerCase()===expected&&(!evidence.source_key||key(s)===evidence.source_key));
     else if(['radio','checkbox','option','switch'].includes(role(el))) {actual=accessibleName(el);verified=(el.checked===true||el.getAttribute('aria-checked')==='true'||el.getAttribute('aria-selected')==='true')&&clean(actual).toLowerCase()===expected;}
     else if(role(el)==='button') {
       // Styled multiple-choice options. Only a state the page itself exposes
@@ -455,13 +480,37 @@
     }
     else if(el.tagName==='SELECT'){const option=el.selectedOptions[0];verified=!!option&&(clean(option.text).toLowerCase()===expected||clean(option.value).toLowerCase()===expected);}
     else if(editable(el))verified=clean(actual).toLowerCase()===expected;
-    return {visible:true,verified,actual:clean(actual).slice(0,1000)};
+    else supported=false;
+    return {visible:true,verified,supported,actual:clean(actual).slice(0,1000)};
   }
-  window.__assignmentLab={observe,act,hideUI,moveTo,pressEffect,describe,badges,badgesOff,verify,digest,cursorHeld:()=>!!ui?.dot.classList.contains('held')};
+  function visualGuard(point) {
+    let doc=document,x=point.x,y=point.y,el;
+    for(let depth=0;depth<12;depth++) {
+      el=doc.elementFromPoint(x,y);if(!el)return {ok:false,detail:'No visible target at that point.'};
+      while(el.shadowRoot?.elementFromPoint(x,y)&&el.shadowRoot.elementFromPoint(x,y)!==el)el=el.shadowRoot.elementFromPoint(x,y);
+      if(el.tagName!=='IFRAME')break;
+      try {if(el.contentWindow.location.origin!==location.origin||!el.contentDocument)return {ok:false,detail:'Cross-origin frame input refused.'};const r=el.getBoundingClientRect();x-=r.left+el.clientLeft;y-=r.top+el.clientTop;doc=el.contentDocument;}catch{return {ok:false,detail:'Inaccessible frame input refused.'};}
+    }
+    for(let n=el;n;n=parent(n)) {
+      // Classify the hit control and actionable ancestors, not the whole body's
+      // descendant text: an unrelated Submit button must not block every cell.
+      const actionable=n.matches?.('button,input,select,textarea,a[href],[role=button],[role=link],[tabindex],[onclick]');
+      if(sensitive(n)||n.matches?.('a[href],iframe')||((n===el||actionable)&&['terminal','advance','refused'].includes(classification(n))))
+        return {ok:false,detail:'Visual input cannot activate navigation, submission or sensitive controls.'};
+    }
+    const label=clean(el.getAttribute('aria-label'));
+    const owner=label&&[...doc.querySelectorAll(DROPDOWNS)].find(n=>clean(n.getAttribute('aria-label'))===label);
+    const region=closest(el,'table,[role=listbox],[role=list],ol,[data-sortable],[data-rbd-droppable-id]')||(owner&&closest(owner,'table'));
+    if(!region)return {ok:false,detail:'Point is outside a recognized answer table, menu or ordering list.'};
+    return {ok:true};
+  }
+  window.__assignmentLab={observe,act,hideUI,moveTo,pressEffect,describe,badges,badgesOff,verify,digest,visualGuard,cursorHeld:()=>!!ui?.dot.classList.contains('held')};
   if(!globalThis.chrome?.runtime?.onMessage)return;
   chrome.runtime.onMessage.addListener((message,_sender,reply)=>{
     if(message.type==='observe'){reply(observe());return true;}
     if(message.type==='digest'){reply({digest:digest()});return true;}
+    if(message.type==='viewport'){reply({width:innerWidth,height:innerHeight,scrollX,scrollY,scale:visualViewport?.scale||1});return true;}
+    if(message.type==='visual_guard'){reply(visualGuard(message.point));return true;}
     if(message.type==='verify'){reply(verify(message.evidence));return true;}
     if(message.type==='badges'){badges(message.entries);reply({ok:true});return true;}
     if(message.type==='badges_off'){badgesOff();reply({ok:true});return true;}
