@@ -55,7 +55,19 @@ function emit(entry) {
 // The run belongs to the tab the student pressed Start on. Same-site
 // navigation inside the assignment is allowed (connect.x.com -> newconnect.x.com);
 // anything else ends the run rather than following it.
-function siteOf(url) { try { const h = new URL(url).hostname.split('.'); return h.length > 2 ? h.slice(-2).join('.') : h.join('.'); } catch { return ''; } }
+// Registrable domain, aware of the common multi-label public suffixes so that
+// two tenants under github.io / co.uk / edu.au are NOT treated as one site.
+// Not the whole Public Suffix List, but the shapes courseware and the reported
+// attacks actually use; anything unlisted falls back to the last two labels.
+const MULTI_SUFFIX = new Set(['co.uk','ac.uk','org.uk','gov.uk','com.au','edu.au','gov.au','net.au','co.nz','ac.nz','co.za','com.br','co.in','ac.in','edu.in','github.io','githubusercontent.com','web.app','firebaseapp.com','pages.dev','vercel.app','netlify.app','herokuapp.com','instructure.com','blackboard.com']);
+function siteOf(url) {
+  try {
+    const h = new URL(url).hostname.toLowerCase().split('.');
+    if (h.length <= 2) return h.join('.');
+    const lastTwo = h.slice(-2).join('.'), lastThree = h.slice(-3).join('.');
+    return (MULTI_SUFFIX.has(lastTwo) && h.length >= 3) ? lastThree : lastTwo;
+  } catch { return ''; }
+}
 async function boundTab(tabId) {
   let tab; try { tab = await chrome.tabs.get(tabId); } catch { throw new Error('The assignment tab was closed. The run is over.'); }
   if (!/^https?:/.test(tab.url || '')) throw new Error('The assignment tab moved to a page the agent cannot read (' + (tab.url || 'no URL') + ').');
@@ -141,9 +153,13 @@ const centre = box => ({x: Math.round(box.x + box.w / 2), y: Math.round(box.y + 
 // safe coordinate and the caller falls back to the DOM path for that one move.
 async function reveal(tabId, el) {
   const mapped = refMap.get(el.ref); if (!mapped) return null;
-  const offset = frameOffsets.get(mapped.frameId); if (!offset || offset.exact === false) return null;
   let r; try { r = await chrome.tabs.sendMessage(tabId, {type: 'reveal', ref: mapped.ref}, {frameId: mapped.frameId}); } catch { return null; }
   if (!r?.ok || !r.visible) return null;
+  // Use the offset the frame measured AFTER scrolling, not the one cached at
+  // observation time; scrolling may have moved the iframe. Top frame offset is
+  // {0,0}. A frame that cannot place itself exactly has no safe coordinate.
+  const offset = mapped.frameId === 0 ? {x: 0, y: 0, exact: true} : (r.offset || frameOffsets.get(mapped.frameId));
+  if (!offset || offset.exact === false) return null;
   return {...r, box: {...r.box, x: r.box.x + offset.x, y: r.box.y + offset.y}, frameId: mapped.frameId, localRef: mapped.ref};
 }
 
@@ -641,13 +657,29 @@ async function run(tabId) {
     await compatible(await settings());
     await AssignmentVisual.attach(tabId);                      // every interaction is real browser input
     await injectAll(tabId);
+    let injectedUrl = tab.url;
+    // A same-site full-document navigation (Next loading a new page) destroys the
+    // injected content scripts and renumbers frames. Every observe goes through
+    // this: it re-injects when the URL has moved since injection, and again if a
+    // read still finds no frame, then retries once. Legitimate assignment
+    // navigation is preserved; a dead page fails after the retry.
+    const observeResilient = async () => {
+      const now = await chrome.tabs.get(tabId);
+      if (now.url !== injectedUrl) { await pause(400); await injectAll(tabId); injectedUrl = now.url; runOrigin = new URL(now.url).origin; emit({kind: 'info', message: 'The page navigated; re-reading it.'}); }
+      try { return await observeAllFrames(tabId); }
+      catch (e) {
+        if (!/No assignment frame/.test(e.message)) throw e;
+        await pause(500); await injectAll(tabId); injectedUrl = (await chrome.tabs.get(tabId)).url; runOrigin = new URL(injectedUrl).origin;
+        return await observeAllFrames(tabId);
+      }
+    };
     emit({kind: 'info', message: 'Reading ' + new URL(tab.url).host + ' · extension ' + chrome.runtime.getManifest().version + ' · bound to this tab; switching tabs will not move or stop it'});
 
     while (!state.stopRequested) {
       const config = await settings(); doubleCheck = config.double_check;
       if (state.cost >= config.spend_limit) { emit({kind: 'stop', message: `Spending limit reached ($${state.cost.toFixed(3)} of $${config.spend_limit.toFixed(2)}). Raise it in Setup to continue.`}); break; }
       await boundTab(tabId);
-      const page = await observeAllFrames(tabId);
+      const page = await observeResilient();
       await refreshEvidence(tabId, page);
       if (page.warnings.length) emit({kind: 'warn', message: page.warnings.join(' ')});
       const changed = page.digest !== lastDigest; lastDigest = page.digest;
@@ -758,7 +790,7 @@ async function run(tabId) {
       }
 
       let landed = false; if (outcome.ok && !outcome.look) landed = await waitForEffect(tabId, page.digest);
-      const updated = await observeAllFrames(tabId); await refreshEvidence(tabId, updated);
+      const updated = await observeResilient(); await refreshEvidence(tabId, updated);
       const actedPart = coverage.current?.parts.get(outcome.partId || action.part_id);
       const domDecided = actedPart?.domEvidence?.supported === true;
       const answered = outcome.needsVerification || action.action.startsWith('visual_') || action.action === 'reorder' || answering(action, page);
@@ -800,7 +832,7 @@ chrome.runtime.onInstalled.addListener(() => chrome.sidePanel.setPanelBehavior({
 // DevTools-only integration surface for the loaded-extension tests. Not
 // reachable from web pages.
 globalThis.__assignmentHarness = {
-  injectAll, observeAllFrames, actOnRef, executeAction, refreshEvidence, waitForEffect, capture, compatible, makeSnapshot, currentSnapshot, verifyVisual, run, settle, perform, reveal,
+  injectAll, observeAllFrames, actOnRef, executeAction, refreshEvidence, waitForEffect, capture, compatible, makeSnapshot, currentSnapshot, verifyVisual, run, settle, perform, reveal, siteOf,
   setSnapshot(s) { decisionSnapshot = s; }, setDoubleCheck(v) { doubleCheck = !!v; }, setPendingMenu(m) { pendingMenu = m; },
   get coverage() { return coverage; }, get state() { return state; }, get pendingMenu() { return pendingMenu; },
   reset(origin) { runOrigin = origin; runSite = siteOf(origin); coverage = new AssignmentCoverage.Coverage(); state.stopRequested = false; pendingMenu = null; lastOpened = null; interactionFailures.clear(); visualFailures.clear(); },

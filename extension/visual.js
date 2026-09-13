@@ -70,7 +70,10 @@
     if (gestureUrl && (tab.url !== gestureUrl || tab.status === 'loading')) throw new Error('The page navigated during browser input; the gesture was abandoned.');
     return tab;
   }
-  async function begin(id, stopped) { await attach(id); gestureUrl = (await guard(id, stopped)).url; cancelled = false; }
+  // Adopt the current document as this gesture's, THEN guard. Guarding first
+  // would compare the fresh page against the previous gesture's URL and reject
+  // the first move after any navigation.
+  async function begin(id, stopped) { await attach(id); gestureUrl = ''; const tab = await guard(id, stopped); gestureUrl = tab.url; cancelled = false; return tab; }
 
   async function mouse(id, type, pt, extra, stopped) {
     await guard(id, stopped);

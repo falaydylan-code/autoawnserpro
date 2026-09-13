@@ -48,7 +48,8 @@
         // for the next question). Otherwise fall back to the id hash.
         for (const q of this.questions.values()) {
           if (hint && q.hint && hint !== q.hint) continue;
-          const shares = incoming.some(i => [...q.parts.values()].some(pt => pt.target_key === i.key
+          if (q.attempt?.locked) continue;                   // a graded, locked question never adopts new work
+          const shares = incoming.some(i => [...q.parts.values()].some(pt => pt.target_key === i.key && !pt.retired
             && (!pt.verified || i.answer === normalize(pt.answer) || i.answer.includes(normalize(pt.answer)) || normalize(pt.answer).includes(i.answer))));
           if (shares) { host = q; break; }
         }
@@ -213,12 +214,23 @@
     // A bounded retry allowance per question, not a ceiling on healthy work:
     // enough for every part plus discovery, opening menus and corrections.
     budget() {return Math.min(240,10+8*(this.current?.parts.size || 1));}
-    outstanding(all=true) {
+    // scope 'nav' (default): what still blocks moving on -- a locked question is
+    // done. scope 'submit': what blocks handing in the whole assignment -- a
+    // locked question whose parts were retired without being verified (wrong or
+    // unfinished) still counts, because you must not hand in an incomplete or
+    // incorrect assignment. `all=false` limits to the current question.
+    outstanding(all=true, scope='nav') {
       const questions=all?[...this.questions.values()]:[this.current].filter(Boolean);
       if(!questions.length)return ['No question has been planned'];
       const missing=[];
       for(const q of questions){
-        if(q.attempt?.locked)continue;                       // graded and locked: nothing more is owed here
+        if(q.attempt?.locked){
+          if(scope==='submit'){
+            const unmet=[...q.parts.values()].filter(p=>!p.verified);
+            if(unmet.length)missing.push(...unmet.map(p=>p.what+' ('+(q.attempt.outcome||'graded')+', not verified)'));
+          }
+          continue;
+        }
         if(!q.parts.size)missing.push('No parts planned for '+q.text);
         missing.push(...[...q.parts.values()].filter(p=>!p.verified&&!p.retired).map(p=>p.what));
         missing.push(...[...q.tabs.values()].filter(t=>!t.visited).map(t=>t.name+' has not been inspected'));
@@ -231,7 +243,7 @@
       if(!activating||!target)return '';
       if(target.control==='terminal') {
         if(!config.auto_submit)return 'Hand-in is switched off.';
-        const remaining=this.outstanding();
+        const remaining=this.outstanding(true,'submit');
         if(remaining.length)return 'Cannot hand in; outstanding: '+remaining.join(', ');
         // Every control the extension would treat as an answer has to be
         // accounted for before hand-in, not only text boxes. Siblings of a

@@ -575,7 +575,11 @@
       const el=refs.get(Number(message.ref));
       if(!el?.isConnected){reply({ok:false,detail:'That element is no longer on the page.'});return true;}
       el.scrollIntoView({block:'center',inline:'center',behavior:'instant'});
-      setTimeout(()=>{const r=el.getBoundingClientRect();reply({ok:true,box:{x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height)},visible:visible(el),tag:el.tagName,disabled:el.disabled===true||el.getAttribute('aria-disabled')==='true',focused:document.activeElement===el,value:valueOf(el).slice(0,300),options:el.tagName==='SELECT'?[...el.options].map(o=>o.text.trim()).slice(0,60):undefined});},80);
+      // Measure the frame offset AFTER scrolling: scrolling an off-screen framed
+      // element can move the iframe in the top document, so an offset cached
+      // before the scroll is stale. Reported alongside the rect so the worker
+      // adds a matching pair, never a fresh rect to an old offset.
+      setTimeout(()=>{const r=el.getBoundingClientRect();reply({ok:true,box:{x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height)},offset:frameOffset(),visible:visible(el),tag:el.tagName,disabled:el.disabled===true||el.getAttribute('aria-disabled')==='true',focused:document.activeElement===el,value:valueOf(el).slice(0,300),options:el.tagName==='SELECT'?[...el.options].map(o=>o.text.trim()).slice(0,60):undefined});},80);
       return true;
     }
     if(message.type==='focus'){const el=refs.get(Number(message.ref));if(el?.isConnected){el.focus();reply({ok:document.activeElement===el});}else reply({ok:false});return true;}
