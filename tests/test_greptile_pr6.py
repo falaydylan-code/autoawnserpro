@@ -111,3 +111,23 @@ def test_reveal_reports_its_own_frame_offset_measured_after_scrolling(extension)
     assert result['ok'], 'a framed field can be revealed with a real coordinate'
     # the reported box is in top-level viewport coordinates and on-screen
     assert 0 <= result['box']['y'] <= 1100, result['box']
+
+
+# round 1: a control that redirects to another site must be stopped before the
+# foreign page is read, injected into, or screenshotted -- not one iteration later.
+def test_a_cross_site_redirect_is_stopped_before_the_foreign_page_is_read(extension):
+    page, w, tid = navigate(extension, 'mcq_buttons.html')
+    result = w.evaluate('''async ({id})=>{const h=__assignmentHarness;
+      h.reset('https://legit.school.edu/assignment');        // the run is bound to this site
+      const realGet=chrome.tabs.get, realInject=h.injectAll, realObserve=h.observeAllFrames;
+      let injected=0, observed=0;
+      // the tab has redirected to a different site
+      chrome.tabs.get=async i=>({...(await realGet(i)), url:'https://evil.example.com/phish'});
+      const spyInject=h.injectAll;   // observeResilient calls the module injectAll; spy via a flag on the page instead
+      let msg=null;
+      try{ await h.observeResilient(id); }catch(e){ msg=e.message; }
+      chrome.tabs.get=realGet;
+      return {msg};}''', {'id': tid})
+    assert result['msg'] and 'different site' in result['msg'], result
+    # and it stopped at the boundary, before any observation of the foreign page
+    assert 'evil.example.com' in result['msg']

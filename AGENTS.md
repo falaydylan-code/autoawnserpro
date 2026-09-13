@@ -175,6 +175,11 @@ Do not undo these without a reason, and add to the list when you find another.
   checked in a loaded extension: background-tab screenshot and input work,
   synthesizeScrollGesture hangs on a background tab. `scripts/` and the CDP probe
   in the scratchpad are how; do the same before adopting any new CDP command.
+- **The loaded-extension browser tests can flake under the full-suite load.**
+  The ~40 tests that launch Chromium with the extension share a machine running
+  195 tests; an occasional CDP/screenshot timing flake shows as one failure in a
+  batch that passes when the file or test is re-run alone. Re-run a browser-test
+  failure in isolation before treating it as real.
 - **The model may be the weak link, and the harness must fail safe around it.**
   Live MiniMax runs dither: it miscomputes graph pixels, flip-flops an answer,
   emits `look` in a loop near the end. In each case the harness stops with a

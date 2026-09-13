@@ -30,6 +30,26 @@ let doubleCheck = false;
 const visualFailures = new Map();
 const interactionFailures = new Map();
 let refMap = new Map(), frameIds = [0], activeFrameIds = [], frameOffsets = new Map(), runOrigin = '', actionFrameId = 0;
+const injectState = {url: ''};   // the document the content scripts were injected into
+
+// A same-site full-document navigation (Next loading a new page) destroys the
+// injected content scripts and renumbers frames. Every observe goes through
+// this. The site boundary is enforced FIRST, before injecting into or reading
+// the page, so a control that redirects to another site is stopped before its
+// content is ever read or screenshotted -- not one iteration later. Then it
+// re-injects when the URL moved since injection, and once more if a read still
+// finds no frame; a dead page fails after that retry.
+async function observeResilientFor(tabId) {
+  const now = await boundTab(tabId);
+  if (now.url !== injectState.url) { await pause(400); await boundTab(tabId); await injectAll(tabId); injectState.url = now.url; runOrigin = new URL(now.url).origin; emit({kind: 'info', message: 'The page navigated; re-reading it.'}); }
+  try { return await observeAllFrames(tabId); }
+  catch (e) {
+    if (!/No assignment frame/.test(e.message)) throw e;
+    const settled = await boundTab(tabId);           // boundary again before the retry inject
+    await pause(500); await injectAll(tabId); injectState.url = settled.url; runOrigin = new URL(settled.url).origin;
+    return await observeAllFrames(tabId);
+  }
+}
 
 const norm = s => String(s || '').normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
 const pause = ms => new Promise(r => setTimeout(r, ms));
@@ -657,22 +677,8 @@ async function run(tabId) {
     await compatible(await settings());
     await AssignmentVisual.attach(tabId);                      // every interaction is real browser input
     await injectAll(tabId);
-    let injectedUrl = tab.url;
-    // A same-site full-document navigation (Next loading a new page) destroys the
-    // injected content scripts and renumbers frames. Every observe goes through
-    // this: it re-injects when the URL has moved since injection, and again if a
-    // read still finds no frame, then retries once. Legitimate assignment
-    // navigation is preserved; a dead page fails after the retry.
-    const observeResilient = async () => {
-      const now = await chrome.tabs.get(tabId);
-      if (now.url !== injectedUrl) { await pause(400); await injectAll(tabId); injectedUrl = now.url; runOrigin = new URL(now.url).origin; emit({kind: 'info', message: 'The page navigated; re-reading it.'}); }
-      try { return await observeAllFrames(tabId); }
-      catch (e) {
-        if (!/No assignment frame/.test(e.message)) throw e;
-        await pause(500); await injectAll(tabId); injectedUrl = (await chrome.tabs.get(tabId)).url; runOrigin = new URL(injectedUrl).origin;
-        return await observeAllFrames(tabId);
-      }
-    };
+    injectState.url = tab.url;
+    const observeResilient = () => observeResilientFor(tabId);
     emit({kind: 'info', message: 'Reading ' + new URL(tab.url).host + ' · extension ' + chrome.runtime.getManifest().version + ' · bound to this tab; switching tabs will not move or stop it'});
 
     while (!state.stopRequested) {
@@ -832,8 +838,8 @@ chrome.runtime.onInstalled.addListener(() => chrome.sidePanel.setPanelBehavior({
 // DevTools-only integration surface for the loaded-extension tests. Not
 // reachable from web pages.
 globalThis.__assignmentHarness = {
-  injectAll, observeAllFrames, actOnRef, executeAction, refreshEvidence, waitForEffect, capture, compatible, makeSnapshot, currentSnapshot, verifyVisual, run, settle, perform, reveal, siteOf,
+  injectAll, observeAllFrames, observeResilient: observeResilientFor, boundTab, actOnRef, executeAction, refreshEvidence, waitForEffect, capture, compatible, makeSnapshot, currentSnapshot, verifyVisual, run, settle, perform, reveal, siteOf,
   setSnapshot(s) { decisionSnapshot = s; }, setDoubleCheck(v) { doubleCheck = !!v; }, setPendingMenu(m) { pendingMenu = m; },
   get coverage() { return coverage; }, get state() { return state; }, get pendingMenu() { return pendingMenu; },
-  reset(origin) { runOrigin = origin; runSite = siteOf(origin); coverage = new AssignmentCoverage.Coverage(); state.stopRequested = false; pendingMenu = null; lastOpened = null; interactionFailures.clear(); visualFailures.clear(); },
+  reset(origin) { runOrigin = origin; runSite = siteOf(origin); injectState.url = ''; coverage = new AssignmentCoverage.Coverage(); state.stopRequested = false; pendingMenu = null; lastOpened = null; interactionFailures.clear(); visualFailures.clear(); },
 };
