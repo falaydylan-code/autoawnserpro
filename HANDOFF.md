@@ -1,5 +1,33 @@
 # Handoff log
 
+## 2026-09-13 — Codex — release integration and visual guard correction (0.7.1)
+
+**Did:** Resumed after Claude's 6138d40/d369fba completion, preserving all fixes.
+Found one additional real failure: visualGuard classified BODY's aggregate text,
+so an unrelated Submit Assignment control could block every dropdown. It now
+classifies the hit element and actionable ancestors; sensitive-field and direct
+submission refusals remain. Bumped extension/content version to 0.7.1.
+
+**Verified:** Full regression suite: 165 passed; the additional new regression
+also passes (166 cases total). The regression failed before the fix and passes after it, including
+a nested-span click on Submit remaining refused. Live Railway health is OK;
+capabilities reports protocol 2 with parts, ordering, visual input and verification.
+Claude's stored smoke artifacts show 20 dropdown cells verified, ordering verified,
+and a closed-shadow answer screenshot-verified. These are fixture runs, not a
+claim that the whole McGraw Hill assignment was completed.
+
+**Left undone:** Full live agent validation on both McGraw Hill question types.
+The actual Connect worksheet was inspected through its iframe: dropdown triggers
+are ordinary td.dropDownList.responseCell with tabindex/dropdowntype; opening
+reveals an input.dropdownButton and role=listbox/options. No closed shadow root
+is needed for that worksheet. This confirms selector evidence, not end-to-end
+agent success. Reload extension and assignment page before the next user run.
+
+**Watch out:** 0.7.1 uses the existing protocol-2 backend and requires debugger
+permission for browser input. Publication targets falaydylan-code/awnseragent2.0;
+the original autoawnserpro remote is left unchanged.
+
+
 ## 2026-09-12 — claude — finished Codex's ordering / dropdown / visual-fallback plan (0.7.0)
 
 **Did:** Codex implemented `plans/visual-ordering/PLAN.md` on

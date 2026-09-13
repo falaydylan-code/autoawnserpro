@@ -103,3 +103,20 @@ def test_same_labels_do_not_hide_wrong_item_identity(extension):
     result=w.evaluate('''async id=>{const h=__assignmentHarness,p=await h.observeAllFrames(id),ref=s=>p.elements.find(e=>e.key.endsWith('#'+s)).ref;
     h.coverage.read({question:'Duplicate labels',parts:[{id:'o',kind:'ordering',what:'Order',answer:'ordered',ref:ref('order'),order:['net','expense','revenue'].map(ref),sequence:['Net Income','Item','Item']}]},p);await h.refreshEvidence(id,p);return h.coverage.ledger()[0].verified;}''',tid)
     assert not result
+
+
+def test_unrelated_submit_label_does_not_block_dropdown_input(extension):
+    page,w,tid=navigate(extension,'custom_dropdowns.html')
+    page.evaluate("() => { const b=document.createElement('button'); b.textContent='Submit Assignment'; document.body.prepend(b); }")
+    result=w.evaluate('''async id=>{const h=__assignmentHarness,p=await h.observeAllFrames(id),cell=p.elements.find(e=>e.key.endsWith('#cell_0_0'));
+      h.coverage.read({question:'Classify',parts:[{id:'a',what:'Accounts Payable Type',answer:'Liability',ref:cell.ref}]},p);
+      try{return await h.executeAction(id,{action:'click',purpose:'open',part_id:'a',ref:cell.ref},p,{});}catch(e){return {ok:false,detail:e.message};}}''',tid)
+    assert result['ok'],result
+    assert page.get_by_role('option',name='Liability',exact=True).is_visible()
+    page.keyboard.press('Escape')
+    blocked=page.evaluate('''() => {
+      const button=document.querySelector('button');button.innerHTML='<span>Submit Assignment</span>';
+      const r=button.querySelector('span').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};
+    }''')
+    refusal=w.evaluate('(a)=>chrome.tabs.sendMessage(a.id,{type:"visual_guard",point:a.point},{frameId:0})',{'id':tid,'point':blocked})
+    assert not refusal['ok']

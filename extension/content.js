@@ -1,6 +1,6 @@
 /* Observation and bounded DOM actions. No model credentials or strategy here. */
 (() => {
-  const VERSION = '0.7.0';
+  const VERSION = '0.7.1';
   if (window.__assignmentLabContent === VERSION) return;
   window.__assignmentLabContent = VERSION;
   let refs = new Map(), previousKeys = new Set(), cancelled = false;
@@ -491,7 +491,13 @@
       if(el.tagName!=='IFRAME')break;
       try {if(el.contentWindow.location.origin!==location.origin||!el.contentDocument)return {ok:false,detail:'Cross-origin frame input refused.'};const r=el.getBoundingClientRect();x-=r.left+el.clientLeft;y-=r.top+el.clientTop;doc=el.contentDocument;}catch{return {ok:false,detail:'Inaccessible frame input refused.'};}
     }
-    for(let n=el;n;n=parent(n))if(sensitive(n)||n.matches?.('a[href],iframe')||['terminal','advance','refused'].includes(classification(n)))return {ok:false,detail:'Visual input cannot activate navigation, submission or sensitive controls.'};
+    for(let n=el;n;n=parent(n)) {
+      // Classify the hit control and actionable ancestors, not the whole body's
+      // descendant text: an unrelated Submit button must not block every cell.
+      const actionable=n.matches?.('button,input,select,textarea,a[href],[role=button],[role=link],[tabindex],[onclick]');
+      if(sensitive(n)||n.matches?.('a[href],iframe')||((n===el||actionable)&&['terminal','advance','refused'].includes(classification(n))))
+        return {ok:false,detail:'Visual input cannot activate navigation, submission or sensitive controls.'};
+    }
     const label=clean(el.getAttribute('aria-label'));
     const owner=label&&[...doc.querySelectorAll(DROPDOWNS)].find(n=>clean(n.getAttribute('aria-label'))===label);
     const region=closest(el,'table,[role=listbox],[role=list],ol,[data-sortable],[data-rbd-droppable-id]')||(owner&&closest(owner,'table'));

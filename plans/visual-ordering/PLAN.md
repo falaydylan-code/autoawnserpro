@@ -1,3 +1,9 @@
+> Release follow-up (2026-09-13): Codex resumed Claude's completed implementation,
+> verified the live protocol-2 backend and prepared publication to awnseragent2.0.
+> Extension 0.7.1 corrects a visual guard that treated unrelated Submit text as
+> the clicked control. Actual Connect iframe dropdown markup was inspected; full
+> live agent validation remains open. See the newest HANDOFF entry.
+
 > Execution update — 2026-09-12: Dylan authorized Codex to implement this plan
 > directly on `codex/visual-ordering`. Codex completed sections 1–4 and the
 > fixtures and tests of section 5, then hit its usage limit at the end of the
