@@ -9,6 +9,50 @@ Two halves that talk over HTTPS.
 The extension never holds a provider key. Anything shipped to a browser is
 readable by whoever installs it, so every model call goes through the backend.
 
+## Browser input (0.8.0)
+
+Every interaction is real browser input on the tab the run is bound to, driven
+through `chrome.debugger` / CDP (`extension/visual.js`): pointer moves, single
+and double clicks, button-held drags through waypoints, wheel scrolling, typed
+text, and keys with modifiers (Enter, Tab, Shift+Tab, arrows, Escape, Backspace,
+Delete, Control+a). The DOM is used to *find* controls and to *read their state
+back*; it is never used to fake an interaction. Where a control has no DOM
+presence (a canvas graph point, a closed-shadow widget) the model aims from the
+screenshot and the point is checked against the current screen before use. The
+DOM path survives only as the fallback for a frame whose offset cannot be
+measured, and it says so when it is used.
+
+Two facts were checked in a loaded extension before this was built, not assumed:
+`Page.captureScreenshot` and `Input.*` both work on a background tab, so a run
+continues while the student uses other tabs; and `Input.synthesizeScrollGesture`
+hangs on a background tab, so scrolling uses wheel events with the result
+confirmed by the scroll position actually moving.
+
+## Bound to one tab
+
+The run belongs to the tab Start was pressed on (`runSite`, `boundTab`). Same-
+site navigation inside the assignment is followed; a move to another site, or
+the tab closing, or the debugger detaching, stops the run. Switching tabs does
+not move or cancel it and focus is never stolen back. A ~20 s heartbeat keeps
+the MV3 worker alive across the long waits on the model.
+
+## Page states
+
+`content.js` classifies each screen: answering, editable_feedback (graded, retry
+allowed), locked (graded, inputs disabled), loading, complete. On locked
+feedback the worker records the outcome, retires the unfinished parts (never
+marking them correct), and follows Next/Continue if continuing is on. On
+editable feedback it allows a revised plan. On complete it stops.
+
+## No question ceiling, bounded retries
+
+A run continues until the assignment is complete, the student stops it, the
+spending limit is reached, or a bounded retry runs out: six no-progress turns,
+the same answer interaction failing three times, model answer flip-flop, or four
+self-changes of the page mid-decision. Navigation and looking do not feed the
+persistent-failure counter. A completed part resets its counters. The old fixed
+per-run step ceiling is gone.
+
 ## The agent loop
 
 `extension/background.js` owns it and runs one step at a time:
@@ -43,11 +87,12 @@ Informed by observed browser-agent behavior; this is our own implementation.
 
 - **Instructions come only from the system prompt.** Page text is fenced as
   `BEGIN UNTRUSTED PAGE TEXT` and is data, never commands.
-- **The action vocabulary is closed** — `read_check`, `fill`, `click`, `select`,
-  `scroll`, `drag`, `reorder`, `visual_click`, `visual_drag`, `verify`, `press`,
-  `scroll_to`, `done`, `give_up`. Anything else is rejected before execution, so a
-  page cannot introduce a verb. `verify` is accepted only in the verification
-  phase and can never execute anything.
+- **The action vocabulary is closed** — `read_check`, `look`, `fill`, `click`,
+  `dblclick`, `hover`, `select`, `scroll`, `scroll_to`, `press`, `drag`,
+  `reorder`, `visual_click`, `visual_drag`, `verify`, `done`, `give_up`. Anything
+  else is rejected before execution, so a page cannot introduce a verb. `press`
+  takes a key matched against a whitelist regex, never an arbitrary string.
+  `verify` is accepted only in the verification phase and can never act.
 - **Real mouse input is a bounded fallback, not the default.** `reorder`, the
   `visual_*` verbs and clicks on a `widget` (a closed-shadow host the DOM cannot
   see into) go through `chrome.debugger` (`extension/visual.js`). It attaches to

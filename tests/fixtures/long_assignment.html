@@ -1,0 +1,34 @@
+<!doctype html><meta charset="utf-8"><title>Long assignment</title>
+<style>label{display:block;padding:4px}button{padding:8px 14px;margin-right:8px}</style>
+<h1 id="title">Question 1 of 40</h1>
+<fieldset data-question-id="q1"><legend id="stem">Pick the letter B</legend>
+  <div role="radiogroup" id="options"></div>
+</fieldset>
+<button type="button" id="check">Check</button>
+<button type="button" id="next" hidden>Next Question</button>
+<button type="button" id="hint">Show hint</button>
+<div id="feedback" role="status"></div>
+<script>
+// Forty single-part questions. Each says which letter to pick; the options are
+// A, B, C, D. Check grades it and reveals Next. The whole point is that a
+// healthy run gets through all forty. `?total=N` for a different length.
+const TOTAL=Number(new URLSearchParams(location.search).get('total'))||40;
+const LETTERS=['A','B','C','D'];
+window.q=1;window.correct=0;window.hints=0;
+function render(){
+  document.getElementById('title').textContent=`Question ${window.q} of ${TOTAL}`;
+  const want=LETTERS[(window.q*7)%4];window.want=want;
+  document.getElementById('stem').textContent=`Pick the letter ${want}`;
+  document.querySelector('fieldset').setAttribute('data-question-id','q'+window.q);
+  const box=document.getElementById('options');box.innerHTML='';
+  for(const L of LETTERS){const l=document.createElement('label');l.innerHTML=`<input type="radio" name="q" value="${L}"> ${L}`;box.append(l);}
+  document.getElementById('feedback').textContent='';document.getElementById('next').hidden=true;document.getElementById('check').hidden=false;
+}
+document.getElementById('check').onclick=()=>{const p=document.querySelector('input[name=q]:checked');if(!p)return;
+  const ok=p.value===window.want;if(ok)window.correct++;
+  document.getElementById('feedback').textContent=ok?'Correct!':'Incorrect.';
+  for(const i of document.querySelectorAll('input'))i.disabled=true;document.getElementById('check').hidden=true;document.getElementById('next').hidden=false;};
+document.getElementById('next').onclick=()=>{if(window.q>=TOTAL){document.body.innerHTML=`<h1>Assignment complete</h1><p>You have completed this assignment. Your score: ${window.correct} / ${TOTAL}</p>`;return;}window.q++;render();};
+document.getElementById('hint').onclick=()=>{window.hints++;};
+render();
+</script>

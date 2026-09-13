@@ -1,3 +1,14 @@
+> Finalizing rebuild (2026-09-13, extension 0.8.0): on Dylan's instruction to
+> deliver the whole scope, the agent was moved to real browser input (CDP) for
+> every interaction, bound to its Start tab (runs in the background), given
+> page-state awareness (editable/locked feedback, complete), custom-dropdown
+> ownership binding, graph/visual dragging, and an uncapped whole-assignment
+> run with bounded retries and a spend limit. Backend is protocol 3. 188 tests;
+> MiniMax filled the 20-cell dropdown table 20/20 correct through the loaded
+> extension. The model itself is the ceiling on the hardest cases; the harness
+> stops safely and names the part when it cannot proceed. See the newest
+> HANDOFF entry.
+
 > Review follow-up (2026-09-13): Greptile reviewed the real PR (#5, from this
 > branch) to **5/5 — safe to merge** at `1e4e49a`, after two rounds covering the
 > PR #4 findings (navigation mid-gesture, visual point off the planned target,

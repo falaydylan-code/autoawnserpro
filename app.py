@@ -351,6 +351,7 @@ async def close(rid: str, who=Depends(owner)):
 class ObservedPart(agent.Part):
     entered: bool = False
     verified: bool = False
+    retired: bool = False
     target_key: str = Field(default='', max_length=600)
     source_key: str = Field(default='', max_length=600)
     source_label: str = Field(default='', max_length=400)
@@ -376,6 +377,10 @@ class ObservedElement(BaseModel):
     choice: bool = False
     external: bool = False
     dropdown: bool = False
+    trigger: bool = False
+    expanded: bool = False
+    opaque: bool = False
+    qid: str = Field(default='', max_length=200)
     owner_ref: int | None = None
     list_ref: int | None = None
     order_index: int | None = None
@@ -393,13 +398,16 @@ class Observation(BaseModel):
     elements: list[ObservedElement] = Field(default_factory=list, max_length=400)
     text: str = Field(default='', max_length=200_000)
     host: str = Field(default='', max_length=300)
-    step: int = Field(default=1, ge=1, le=500)
-    step_budget: int = Field(default=8, ge=1, le=100)
+    step: int = Field(default=1, ge=1, le=10000)
+    step_budget: int = Field(default=8, ge=1, le=1000)
     page_changed: bool = True
     last_action: dict = Field(default_factory=dict)
     task_note: str = Field(default='', max_length=2000)
     phase: Literal['', 'read_check', 'act', 'must_act', 'navigate', 'verify'] = ''
     observation_id: str = Field(default='', max_length=80)
+    page_state: Literal['', 'answering', 'editable_feedback', 'locked', 'loading', 'complete'] = ''
+    feedback: str = Field(default='', max_length=400)
+    attempts_left: int | None = Field(default=None, ge=0, le=1000)
     verification: VerificationTarget | None = None
     plan: str = Field(default='', max_length=2000)
     progress: str = Field(default='', max_length=4000)
@@ -412,7 +420,10 @@ class Observation(BaseModel):
 
 @app.get('/api/capabilities')
 async def capabilities():
-    return {'protocol': 2, 'extension': '0.7.2', 'features': ['parts', 'ordering', 'visual_input', 'visual_verification']}
+    # The extension refuses to start against a backend that does not report the
+    # protocol it needs, so a stale deploy is an actionable message, not a loop.
+    return {'protocol': 3, 'extension': '0.8.0',
+            'features': ['parts', 'ordering', 'visual_input', 'visual_verification', 'browser_input', 'page_states', 'no_step_ceiling']}
 
 
 @app.post('/api/agent/step')

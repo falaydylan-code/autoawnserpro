@@ -170,6 +170,23 @@ Do not undo these without a reason, and add to the list when you find another.
 - **Worktree for question coverage:** `C:/Users/falay/assignment-agent-question-coverage`
   on `codex/question-coverage`. The original checkout has a pre-existing rebase;
   Codex deliberately did not resolve or overwrite it.
+- **Prove the input channel before trusting it.** 0.8.0 moved every interaction
+  to real CDP browser input. Before writing it, both claims it rests on were
+  checked in a loaded extension: background-tab screenshot and input work,
+  synthesizeScrollGesture hangs on a background tab. `scripts/` and the CDP probe
+  in the scratchpad are how; do the same before adopting any new CDP command.
+- **The loaded-extension browser tests can flake under the full-suite load.**
+  The ~40 tests that launch Chromium with the extension share a machine running
+  195 tests; an occasional CDP/screenshot timing flake shows as one failure in a
+  batch that passes when the file or test is re-run alone. Re-run a browser-test
+  failure in isolation before treating it as real.
+- **The model may be the weak link, and the harness must fail safe around it.**
+  Live MiniMax runs dither: it miscomputes graph pixels, flip-flops an answer,
+  emits `look` in a loop near the end. In each case the harness stops with a
+  specific reason or advances correctly -- it never fakes success. A run that
+  reaches its ceiling reports which part needs a person. Picking a stronger
+  model is `../model-eval`'s job, not a reason to loosen a guard. But do absorb
+  the model's *form* slips (below).
 - **The model's slips are the harness's to absorb, not to punish.** Live runs
   with MiniMax kept dying on form, not substance: `select` on a menu option,
   a forgotten `part_id`, a forgotten `kind:"ordering"`, "Equity" sharpened to
