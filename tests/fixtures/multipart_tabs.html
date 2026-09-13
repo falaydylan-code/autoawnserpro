@@ -1,0 +1,11 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Multipart regression</title>
+<fieldset id="question" data-question-id="arithmetic"><legend>Calculate both amounts</legend>
+<div role="tablist"><button role="tab" id="tabA" aria-controls="partA" aria-selected="true">Part 1</button><button role="tab" id="tabB" aria-controls="partB" aria-selected="false">Part 2</button></div>
+<section id="partA" role="tabpanel"><label>Part 1: 2 + 2<input id="a"></label></section>
+<section id="partB" role="tabpanel" hidden><label>Part 2: 3 + 3<input id="b"></label></section>
+<button id="nextPart">Submit Answer</button><button id="submit">Submit Assignment</button><output id="feedback"></output></fieldset>
+<script>
+function show(b){partA.hidden=b;partB.hidden=!b;tabA.setAttribute('aria-selected',String(!b));tabB.setAttribute('aria-selected',String(b))}
+tabA.onclick=()=>show(false);tabB.onclick=()=>show(true);nextPart.onclick=()=>show(true);
+window.submissions=0;submit.onclick=()=>{window.submissions++;feedback.textContent=a.value==='4'&&b.value==='6'?'Your Answer: correct':'Your Answer: incorrect'};
+</script></html>

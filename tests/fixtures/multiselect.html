@@ -1,0 +1,22 @@
+<!doctype html><meta charset="utf-8"><title>Select all that apply</title>
+<main>
+<fieldset data-question-id="q12"><legend>Which of the following are current assets? Select all that apply.</legend>
+<div role="group" id="choices">
+  <label><input type="checkbox" id="cash" value="Cash"> Cash</label>
+  <label><input type="checkbox" id="ar" value="Accounts Receivable"> Accounts Receivable</label>
+  <label><input type="checkbox" id="land" value="Land"> Land</label>
+  <label><input type="checkbox" id="bonds" value="Bonds Payable"> Bonds Payable</label>
+</div>
+</fieldset>
+<button type="button" id="submitAll">Submit Assignment</button>
+</main>
+<script>
+  window.submissions = 0;
+  document.getElementById('submitAll').onclick = () => { window.submissions++; };
+  // Courseware sometimes reveals another option after an answer is entered.
+  window.revealAnother = () => {
+    const label = document.createElement('label');
+    label.innerHTML = '<input type="checkbox" id="inventory" value="Inventory"> Inventory';
+    document.getElementById('choices').append(label);
+  };
+</script>

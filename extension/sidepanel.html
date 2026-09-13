@@ -2,13 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Assignment Lab</title>
+<title>Assignment Lab 2.0</title>
 <link rel="stylesheet" href="sidepanel.css">
 </head>
 <body>
 
 <header>
-  <span class="brand">Assignment Lab</span>
+  <span class="brand">Assignment Lab 2.0</span>
   <button id="eth" class="eth off" type="button" aria-pressed="false"
           title="Browser control is off. Click to arm it.">ETH</button>
 </header>
@@ -22,7 +22,11 @@
   <label class="check"><input id="advance" type="checkbox">
     Keep going after each question</label>
   <p class="hint" style="margin:2px 0 10px">Lets the agent press Next, Continue or a
-    confidence rating to reach the next question. It never hands in the assignment.</p>
+    confidence rating after all parts are verified. Part tabs remain usable when this is off.</p>
+  <label class="check"><input id="auto_submit" type="checkbox"> Hand in when every known part is verified</label>
+  <p class="hint">Off by default. Verification confirms entered values, not academic correctness.</p>
+  <label class="check"><input id="badges" type="checkbox" checked> Number controls in screenshots</label>
+  <p id="progress" role="status" aria-live="polite">No parts planned yet.</p>
 
   <div class="controls">
     <button id="start" class="primary" disabled>Read this page</button>
@@ -54,8 +58,8 @@
 
   <p class="hint">
     The agent looks at the page each step and decides one action. It will not sign in,
-    enter passwords or payment details, accept banners, solve captchas, or submit your
-    assignment &mdash; submitting stays yours.
+    enter passwords or payment details, accept banners, or solve captchas.
+    Hand-in requires the switch above and a completed, verified parts checklist.
   </p>
 </main>
 

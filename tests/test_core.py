@@ -486,3 +486,81 @@ def test_a_field_already_holding_the_answer_is_treated_as_done():
     flat = ' '.join(agent.SYSTEM_PROMPT.split())
     assert 'A field listed with a value already contains that text' in flat
     assert 'Re-entering an answer that is already there' in flat
+
+
+@pytest.mark.parametrize('raw', [
+    '{"action":"drag","ref":1}',
+    '{"action":"drag","ref":1,"to":1}',
+    '{"action":"press","ref":1,"key":"Control+L"}',
+    '{"action":"press","ref":1}',
+    '{"action":"click","ref":1,"mode":"javascript"}',
+    '{"action":"read_check","parts":[{"id":"a","what":"A","answer":"1"},{"id":"a","what":"B","answer":"2"}]}',
+])
+def test_coverage_actions_reject_malformed_arguments(raw):
+    import agent
+    with pytest.raises(ValueError): agent.parse_action(raw)
+
+
+def test_coverage_actions_and_progress_rendering():
+    import agent
+    assert agent.parse_action('{"action":"drag","ref":1,"to":2}').to==2
+    assert agent.parse_action('{"action":"press","ref":1,"key":"Space"}').key=='Space'
+    assert agent.parse_action('{"action":"scroll_to","ref":1}').ref==1
+    text=agent.build_observation_text({'elements':[{'ref':2,'group':1,'depth':1,'new':True,'row':'Cash','column':'Amount'}],'progress':'2 of 3 parts done'})
+    assert '  ref 2' in text and 'NEW' in text and 'group ref 1' in text
+    assert 'row: Cash' in text and 'column: Amount' in text
+    assert 'PROGRESS: 2 of 3 parts done' in text
+    for instruction in ['DRAG AND KEYBOARD','STRUCTURED CONTROLS AND PARTS','part_id','hand-in switch']:
+        assert instruction in agent.SYSTEM_PROMPT
+
+
+def test_observation_rejects_oversized_and_malformed_parts():
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError): app.Observation(ledger=[{'id':'a','what':'A','answer':'1'}]*61)
+    with pytest.raises(ValidationError): app.Observation(ledger=[{'id':'a','answer':'1'}])
+    with pytest.raises(ValidationError): app.Observation(elements=[{'ref':1,'depth':100}])
+
+
+def test_refs_written_as_strings_are_accepted_not_thrown_away():
+    """MiniMax sometimes writes "ref":"7". Strict typing turned that into a
+    wasted step with an 'invalid action format' error; a step costs money."""
+    import agent
+    assert agent.parse_action('{"action":"click","ref":"7"}').ref == 7
+    action = agent.parse_action(
+        '{"action":"read_check","has_question":true,"question":"q",'
+        '"parts":[{"id":"a","what":"option","answer":"Cash","ref":"3"}]}')
+    assert action.parts[0].ref == 3
+    with pytest.raises(ValueError):
+        agent.parse_action('{"action":"click","ref":"seven"}')
+
+
+def test_harness_identity_strings_are_not_shown_to_the_model():
+    """`key` is how the worker recognises an element across steps. It is noise
+    to the model and was crowding out the picture."""
+    import agent
+    text = agent.build_observation_text({'elements': [
+        {'ref': 1, 'role': 'button', 'name': 'Cash', 'key': '0:BUTTON#optA', 'control': ''}]})
+    assert 'optA' not in text and 'key:' not in text
+    assert 'ref 1 | button | name: Cash' in text
+
+
+def test_the_ledger_is_rendered_as_plain_progress_not_json():
+    import agent
+    text = agent.build_observation_text({'ledger': [
+        {'id': 'a', 'what': 'blank 1', 'answer': '2600', 'entered': True, 'verified': True,
+         'target_key': '0:INPUT#x', 'source_key': '', 'source_label': ''},
+        {'id': 'b', 'what': 'blank 2', 'answer': '1400', 'entered': True, 'verified': False,
+         'target_key': '0:INPUT#y', 'source_key': '', 'source_label': ''}]})
+    assert 'a: blank 1 -> 2600 [VERIFIED]' in text
+    assert 'b: blank 2 -> 1400 [entered, not yet verified]' in text
+    assert 'target_key' not in text and '0:INPUT' not in text
+
+
+def test_the_prompt_tells_the_model_most_questions_are_one_part():
+    import agent
+    flat = ' '.join(agent.SYSTEM_PROMPT.split())
+    assert 'MOST QUESTIONS ARE SIMPLE' in agent.SYSTEM_PROMPT
+    assert 'A multiple-choice question is ONE part' in flat
+    assert 'Find the question in the picture first' in flat
+    # the screenshot-first framing survives the additions
+    assert 'THE SCREENSHOT IS THE PAGE' in agent.SYSTEM_PROMPT

@@ -1,0 +1,13 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Pointer matching</title>
+<style>body{font:18px system-ui}.source,.target{display:inline-block;padding:20px;margin:8px;border:2px solid;width:220px;min-height:50px}.target .source{padding:4px;margin:0;width:190px}</style>
+<fieldset id="question"><legend>Match the account descriptions</legend>
+<div id="pool"><div id="cash" class="source ui-draggable" tabindex="0">Same-period collections</div><div id="receivable" class="source ui-draggable" tabindex="0">Service before collection</div><div id="deferred" class="source ui-draggable" tabindex="0">Advance collections</div></div>
+<div id="cashTarget" class="target ui-droppable" aria-label="Cash"></div><div id="receivableTarget" class="target ui-droppable" aria-label="Accounts Receivable"></div><div id="deferredTarget" class="target ui-droppable" aria-label="Deferred Revenue"></div>
+<button id="submit" disabled>Submit Assignment</button><output id="feedback"></output></fieldset>
+<script>
+let held=null,moved=false,start=null;window.pointerMoves=0;
+document.addEventListener('pointerdown',e=>{held=e.target.closest('.source');start=[e.clientX,e.clientY];moved=false});
+document.addEventListener('pointermove',e=>{if(held){window.pointerMoves++;if(Math.hypot(e.clientX-start[0],e.clientY-start[1])>12)moved=true}});
+document.addEventListener('pointerup',e=>{const t=e.target.closest('.target');if(held&&moved&&t&&t.id!=='impossible'){t.append(held);submit.disabled=!['cash','receivable','deferred'].every(id=>document.getElementById(id+'Target').querySelector('.source'))}held=null});
+submit.onclick=()=>feedback.textContent=['cash','receivable','deferred'].every(id=>document.getElementById(id).parentElement.id===id+'Target')?'Your Answer: correct':'Your Answer: incorrect';
+</script></html>

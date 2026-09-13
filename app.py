@@ -9,6 +9,7 @@ import socket
 import time
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
+from typing import Annotated, Literal
 
 import httpx
 from fastapi import FastAPI, HTTPException, Depends, Header, Request
@@ -347,9 +348,37 @@ async def close(rid: str, who=Depends(owner)):
     return run.public()
 
 
+class ObservedPart(agent.Part):
+    entered: bool = False
+    verified: bool = False
+    target_key: str = Field(default='', max_length=600)
+    source_key: str = Field(default='', max_length=600)
+    source_label: str = Field(default='', max_length=400)
+
+
+class ObservedElement(BaseModel):
+    ref: int = Field(ge=1, le=10000, strict=True)
+    key: str = Field(default='', max_length=600)
+    group: int | None = Field(default=None, ge=1, le=10000)
+    depth: int = Field(default=0, ge=0, le=20)
+    role: str = Field(default='', max_length=60)
+    name: str = Field(default='', max_length=400)
+    context: str = Field(default='', max_length=1200)
+    row: str = Field(default='', max_length=300)
+    column: str = Field(default='', max_length=300)
+    blank: str = Field(default='', max_length=80)
+    drag: str | None = Field(default=None, max_length=20)
+    control: str = Field(default='', max_length=30)
+    value: str = Field(default='', max_length=1000)
+    checked: bool = False
+    disabled: bool = False
+    new: bool = False
+    box: dict[str, Annotated[float, Field(allow_inf_nan=False, ge=-10_000_000, le=10_000_000)]] | None = None
+
+
 class Observation(BaseModel):
     screenshot: str = Field(default='', max_length=12_000_000)
-    elements: list = Field(default_factory=list)
+    elements: list[ObservedElement] = Field(default_factory=list, max_length=400)
     text: str = Field(default='', max_length=200_000)
     host: str = Field(default='', max_length=300)
     step: int = Field(default=1, ge=1, le=500)
@@ -357,8 +386,12 @@ class Observation(BaseModel):
     page_changed: bool = True
     last_action: dict = Field(default_factory=dict)
     task_note: str = Field(default='', max_length=2000)
-    phase: str = Field(default='', max_length=20)
+    phase: Literal['', 'read_check', 'act', 'must_act', 'navigate'] = ''
     plan: str = Field(default='', max_length=2000)
+    progress: str = Field(default='', max_length=4000)
+    ledger: list[ObservedPart] = Field(default_factory=list, max_length=60)
+    warnings: list[Annotated[str, Field(max_length=1000)]] = Field(default_factory=list, max_length=30)
+    auto_submit: bool = False
     advance: bool = False
     model: str = Field(default='', max_length=200)
 

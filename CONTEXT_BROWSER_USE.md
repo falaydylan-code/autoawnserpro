@@ -1,5 +1,10 @@
 # Reference: what browser-use does, and where we differ
 
+**Implementation update (0.6.0):** The historical notes below predate the changes.
+Grouped observations, NEW markers, screenshot reference badges and explicit part
+tracking are now implemented. Browser-use itself is not installed; action batching
+is not implemented. See HANDOFF.md for verification and remaining site checks.
+
 Notes on https://github.com/browser-use/browser-use, read on 2026-09-11 from its
 own system prompt and DOM serializer. Kept as **context only** — nothing here has
 been implemented. It is the most mature open-source version of the loop we are

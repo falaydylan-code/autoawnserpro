@@ -1,0 +1,12 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>HTML5 matching</title>
+<style>body{font:18px system-ui} .source,.target{display:inline-block;padding:20px;margin:8px;border:2px solid;width:220px;min-height:50px} .source{background:#eaf5ff} .target .source{margin:0;padding:4px;width:190px} </style>
+<main><fieldset id="question"><legend>Match the account descriptions</legend>
+<div id="pool"><div id="cash" class="source" draggable="true" tabindex="0">Same-period collections</div><div id="receivable" class="source" draggable="true" tabindex="0">Service before collection</div><div id="deferred" class="source" draggable="true" tabindex="0">Advance collections</div></div>
+<div><div id="cashTarget" class="target" aria-label="Cash" aria-dropeffect="move" tabindex="0"></div><div id="receivableTarget" class="target" aria-label="Accounts Receivable" aria-dropeffect="move" tabindex="0"></div><div id="deferredTarget" class="target" aria-label="Deferred Revenue" aria-dropeffect="move" tabindex="0"></div></div>
+<button id="submit" disabled>Submit Assignment</button><output id="feedback"></output></fieldset></main>
+<script>
+document.querySelectorAll('.source').forEach(s=>s.addEventListener('dragstart',e=>e.dataTransfer.setData('text/plain',s.id)));
+document.querySelectorAll('.target:not(#impossible)').forEach(t=>{t.addEventListener('dragover',e=>e.preventDefault());t.addEventListener('drop',e=>{e.preventDefault();const s=document.getElementById(e.dataTransfer.getData('text/plain'));if(s){t.append(s);update()}})});
+function update(){submit.disabled=!['cash','receivable','deferred'].every(id=>document.getElementById(id+'Target').querySelector('.source'))}
+submit.onclick=()=>feedback.textContent=['cash','receivable','deferred'].every(id=>document.getElementById(id).parentElement.id===id+'Target')?'Your Answer: correct':'Your Answer: incorrect';
+</script></html>

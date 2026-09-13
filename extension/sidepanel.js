@@ -2,7 +2,9 @@
 
 const $ = (id) => document.getElementById(id);
 const DEFAULT_BACKEND = 'https://positive-tranquility-production-9fdc.up.railway.app';
-const ALL_SITES = ['https://*/*', 'http://*/*'];
+// Literally <all_urls>: captureVisibleTab accepts that or activeTab and nothing
+// else, and https://*/* once cost a day of blind runs.
+const ALL_SITES = ['<all_urls>'];
 
 let armed = false;
 let running = false;
@@ -101,7 +103,7 @@ $('copylog').onclick = async () => {
     if (e.raw) bits.push('  raw: ' + e.raw);
     return bits.join('\n');
   });
-  const header = `Assignment Lab log — ${new Date().toLocaleString()}\n`
+  const header = `Assignment Lab 2.0 log — ${new Date().toLocaleString()}\n`
     + `${$('questions').textContent} questions, ${$('steps').textContent} steps, ${$('cost').textContent}\n`
     + `page: ${$('page').textContent}\n${'-'.repeat(60)}`;
   try {
@@ -117,6 +119,7 @@ function paintState(state) {
   $('questions').textContent = state.questions || 0;
   $('steps').textContent = state.steps;
   $('cost').textContent = '$' + (state.cost || 0).toFixed(4);
+  $('progress').textContent = state.progress || 'No parts planned yet.';
   paintEth();
 }
 
@@ -160,10 +163,22 @@ $('eth').onclick = async () => {
     return;
   }
 
+  // Turning ETH off is a stop, not a colour change. A run in progress goes
+  // through the same abort-and-cancel path as the Stop button, and the site
+  // access granted on arming is handed back so red means what it says.
   armed = false;
   await chrome.storage.local.set({ armed });
+  if (running) {
+    await chrome.runtime.sendMessage({ type: 'stop' });
+    running = false;
+  }
+  try {
+    await chrome.permissions.remove({ origins: ALL_SITES });
+  } catch (err) {
+    // Chrome refuses to remove a permission that was never granted; that is fine.
+  }
   paintEth();
-  banner('');
+  banner(running ? 'Stopping.' : 'Off. The agent cannot read or act on any page until ETH is armed again.');
 };
 
 async function accessGranted(origin) {
@@ -230,6 +245,9 @@ $('stop').onclick = async () => {
 $('advance').onchange = async () => {
   await chrome.storage.local.set({ advance: $('advance').checked });
 };
+for (const id of ['auto_submit', 'badges']) {
+  $(id).onchange = () => chrome.storage.local.set({ [id]: $(id).checked });
+}
 
 $('save').onclick = async () => {
   await chrome.storage.local.set({
@@ -249,14 +267,16 @@ chrome.runtime.onMessage.addListener((message) => {
 });
 
 (async function boot() {
-  const stored = await chrome.storage.local.get(['backend', 'model', 'note', 'armed', 'advance']);
+  const stored = await chrome.storage.local.get(['backend', 'model', 'note', 'armed', 'advance', 'auto_submit', 'badges']);
   $('backend').value = stored.backend || DEFAULT_BACKEND;
   $('model').value = stored.model || '';
   $('note').value = stored.note || '';
   armed = stored.armed === true;
   $('advance').checked = stored.advance === true;
+  $('auto_submit').checked = stored.auto_submit === true;
+  $('badges').checked = stored.badges !== false;
   await refreshPage();
-  const held = await accessGranted('https://*/*');
+  const held = await accessGranted('<all_urls>');
   if (armed && !held) {
     $('page').textContent += '  ·  access withheld';
   }
