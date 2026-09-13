@@ -8,6 +8,7 @@ const ALL_SITES = ['<all_urls>'];
 
 let armed = false;
 let running = false;
+let runPage = '';
 let tabInfo = null;   // kept fresh so a permission request stays inside the user gesture
 
 function paintEth() {
@@ -105,7 +106,7 @@ $('copylog').onclick = async () => {
   });
   const header = `Assignment Lab 2.0 log — ${new Date().toLocaleString()}\n`
     + `${$('questions').textContent} questions, ${$('steps').textContent} steps, ${$('cost').textContent}\n`
-    + `page: ${$('page').textContent}\n${'-'.repeat(60)}`;
+    + `page: ${runPage || $('page').textContent}\n${'-'.repeat(60)}`;
   try {
     await navigator.clipboard.writeText([header, ...lines].join('\n'));
     banner(`Copied ${entries.length} log entries.`);
@@ -116,6 +117,7 @@ $('copylog').onclick = async () => {
 
 function paintState(state) {
   running = state.running;
+  if(state.runUrl)runPage=state.runUrl+' — '+(state.runTitle||'');
   $('questions').textContent = state.questions || 0;
   $('steps').textContent = state.steps;
   $('cost').textContent = '$' + (state.cost || 0).toFixed(4);
