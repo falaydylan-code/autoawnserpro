@@ -53,6 +53,11 @@
   </section>
   <section id="settings-view" hidden><div class="settings-heading"><h1>Settings</h1><button id="settings-back">Done</button></div>
   <h2>Assignment behavior</h2>
+  <label class="check"><input id="planner_enabled" type="checkbox"> Structured planner (preview)</label>
+  <p class="hint">Plans the question once and verifies readable answers locally. Requires backend protocol 4. Turn off to use the previous loop. Graphs without calibrated geometry pause for review.</p>
+  <label class="check"><input id="check_work" type="checkbox"> Planner: check work once after entry</label><p class="hint">May consume a website attempt. Off by default.</p>
+  <button id="resume-run" type="button">Resume saved planner run</button>
+
   <label class="check"><input id="advance" type="checkbox">
     Keep going after each question</label>
   <p class="hint" style="margin:2px 0 10px">Lets the agent press Next, Continue or a
@@ -60,7 +65,7 @@
   <label class="check"><input id="auto_submit" type="checkbox"> Hand in when every known part is verified</label>
   <p class="hint">Off by default. Verification confirms entered values, not academic correctness.</p>
   <label class="check"><input id="badges" type="checkbox" checked> Number controls in screenshots</label>
-  <label class="check"><input id="double_check" type="checkbox" checked> Confirm each answer with a screenshot too</label>
+  <label class="check"><input id="double_check" type="checkbox" checked> Legacy loop: confirm each answer with a screenshot too</label>
   <p class="hint">On by default. After the page reports an answer is in, the model is shown a fresh
     screenshot and must read the same value back before the part counts as done. Costs one extra
     model call per answer.</p>

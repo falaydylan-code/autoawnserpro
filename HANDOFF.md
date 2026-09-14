@@ -1,5 +1,50 @@
 # Handoff log
 
+## 2026-09-13 — claude — finish the protocol-4 planner (0.9.0 preview)
+
+**Did:** Picked up Codex's protocol-4 planner build (branch
+`codex/planner-completion`) after Codex hit its usage limit mid-backend-deploy,
+and drove it to a finished, green, documented state per `SOP_PLANNER.md`. Codex
+wrote the bulk: `planner.py` (strict envelope, `validate_context`, repair,
+`request_visual`), `extension/planner_content.js` (bounded Tier-A inspection,
+slot classification, SVG getScreenCTM, menu ownership, save/grade state),
+`extension/planner_runtime.js` (the coordinator state machine, six typed widget
+adapters, recovery budgets, four-tier identity, visual calibration, enumeration-
+gated submit, persistence/resume), and the `agent.py`/`app.py`/`background.js`/
+`store.py`/`sidepanel.*`/manifest wiring. I reconciled the collision from my own
+parallel start (my orphan `agent.complete()` was already gone after the branch
+reconcile; my capabilities edit was superseded by Codex's query-param
+negotiation), captured the authoritative spec as `SOP_PLANNER.md`, and closed
+the two SOP §17 acceptance cases that lived only in code, not a test: a disabled
+desired option is refused (GUARD_REJECTED) and an `[active]` focus annotation in
+readback still verifies — new `tests/test_planner_acceptance.py` +
+`tests/fixtures/planner_selection.html`.
+
+**Verified:** `python -m pytest -q` = **233 passed** (231 + the 2 new). The 20
+loaded-extension planner-executor cases (radio one-plan/no-vision, 20 McGraw
+dropdowns one plan, reused menu nodes below the fold, frames + sensitive
+exclusion, ordering, nested-transform SVG, opaque-graph visual fallback,
+enumeration-gated submit, cancel/resume/document-replacement, overlay, delayed
+save) all pass under the loaded extension. SOP §17 case 14 (answer field beside
+Submit, Submit gated) and case 10 (animated content never pixel-identical) are
+already exercised by the existing executor tests on `planner_standard.html`.
+
+**Left undone:** The planner is `planner_release: preview`, default-OFF — the
+0.8 loop remains the shipped default and rollback. The remaining release gates
+in `PLANNER_ROLLOUT.md` §"Validation" are all LIVE and need Dylan's login:
+authorized live McGraw Hill dropdown/choice runs, a fixed-corpus entry/accuracy
+comparison against 0.8, and a measured median-cost reduction. I cannot run those
+without credentials. Backend deploy: see below.
+
+**Watch out:** `deploy-source/` is generated and was left STALE (0.8.0) by the
+mid-flight deploy; Codex staged a non-standard `deploy-source/planner-0.9.0/`
+subfolder. The correct deploy refreshes `deploy-source/` from current source
+(no .env/data/logs), drops the staging subfolder, then `railway up`. Capabilities
+default to protocol 3 (`?protocol=4` negotiates up; `supported_protocols:[3,4]`),
+and `/api/agent/step` is retained, so a deploy does NOT break loaded 0.8
+extensions. Extension and backend still ship together: 0.9.0 planner preview
+refuses a non-protocol-4 backend before any paid call.
+
 ## 2026-09-13 — claude — 0.8.0: real browser input, page states, whole-assignment run
 
 **Did:** The finalizing rebuild. Every interaction is now real browser input via

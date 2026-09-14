@@ -1,0 +1,34 @@
+<!doctype html><meta charset="utf-8"><title>Selection annotation fixture</title>
+<style>td,th{border:1px solid;padding:8px;min-width:150px}table{border-collapse:collapse}
+ul{background:#fff;border:1px solid;position:absolute;padding:8px;margin:0;list-style:none}li{padding:5px;cursor:pointer}
+li[aria-disabled=true]{color:#999;cursor:not-allowed}
+.dropdownButton{margin-left:6px;width:22px;height:22px;border:1px solid #888;background:#eee;cursor:pointer;vertical-align:middle}</style>
+<!-- One custom dropdown cell (McGraw shape): a body-appended listbox that names
+     its owner. One option is disabled; a chosen value renders with a "[active]"
+     focus annotation, so verification must read past that marker. -->
+<main data-question-id="selection-fixture"><h1>Classify Accounts Payable</h1>
+<table><tr><th>Account</th><th>Account Type</th></tr></table></main>
+<script>
+function openMenu(cell){
+ document.querySelector('ul')?.remove();
+ const menu=document.createElement('ul');menu.role='listbox';menu.id='menu_'+cell.id;menu.setAttribute('aria-labelledby',cell.id);
+ const r=cell.getBoundingClientRect();menu.style.left=r.x+'px';menu.style.top=(r.bottom+scrollY)+'px';
+ cell.setAttribute('aria-expanded','true');
+ for(const label of ['Asset','Liability','Revenue']){
+  const option=document.createElement('li');option.role='option';option.textContent=label;
+  if(label==='Liability')option.setAttribute('aria-disabled','true');   // a disabled desired option must be refused
+  option.onclick=()=>{if(option.getAttribute('aria-disabled')==='true')return;
+   cell.querySelector('.dropdownValue').textContent=label+' [active]';  // focus annotation in the readback
+   cell.setAttribute('data-value',label);menu.remove();cell.setAttribute('aria-expanded','false');};
+  menu.append(option);
+ }
+ document.body.append(menu);
+}
+const row=document.querySelector('table').insertRow();row.insertCell().textContent='Accounts Payable';
+const cell=row.insertCell();cell.id='cell';cell.className='dropDownList responseCell';cell.tabIndex=1;cell.setAttribute('dropdowntype','dropDown');
+cell.setAttribute('aria-label','Accounts Payable Account Type');cell.setAttribute('aria-expanded','false');
+const value=document.createElement('span');value.className='dropdownValue';cell.append(value);
+const arrow=document.createElement('input');arrow.type='button';arrow.className='dropdownButton';arrow.id='arrow';arrow.setAttribute('aria-label','open Account Type');arrow.setAttribute('aria-controls','menu_cell');cell.append(arrow);
+cell.onclick=e=>{if(e.target===arrow)return;if(cell.getAttribute('aria-expanded')==='true'){document.querySelector('ul')?.remove();cell.setAttribute('aria-expanded','false');}else openMenu(cell);};
+arrow.onclick=e=>{e.stopPropagation();openMenu(cell);};
+</script>

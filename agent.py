@@ -680,3 +680,29 @@ async def decide(owner, observation, model, record=None, require=''):
                 return action
             except (KeyError, TypeError, IndexError, json.JSONDecodeError):
                 raise ValueError('OpenRouter returned an unexpected response. Nothing was done; inspect provider usage.') from None
+
+async def planner_complete(owner, messages, model, record, max_tokens, reservation, price_limit=None):
+    """One reserved request, no automatic replay after uncertain network outcomes."""
+    import time
+    key=setting('OPENROUTER_API_KEY')
+    if not key:raise ValueError('No API key found. Set OPENROUTER_API_KEY on the backend and restart.')
+    store.reserve_plan(owner,model=model,**reservation)
+    began=time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            response=await client.post('https://openrouter.ai/api/v1/chat/completions',
+                headers={'Authorization':'Bearer '+key},json={'model':model,'messages':messages,'max_tokens':max_tokens,'usage':{'include':True},'provider':{'max_price':price_limit or {},'require_parameters':True}})
+        if response.status_code!=200:
+            # A transport/5xx outcome can be billed; keep its reservation unresolved.
+            if response.status_code in (400,401,402,404,429):store.settle_plan(owner,reservation['request_id'],0,{})
+            raise ValueError('OpenRouter HTTP '+str(response.status_code)+'. Nothing executed; check key, credits or provider usage before retrying.')
+        data=response.json();usage=data.get('usage') or {};cost=cost_value(usage)
+        record.update(cost=cost,input_tokens=usage.get('prompt_tokens') or 0,output_tokens=usage.get('completion_tokens') or 0,
+                      latency=time.monotonic()-began,model=model,provider=str(data.get('provider') or '').replace(key,'[redacted]'),generation_id=str(data.get('id') or '').replace(key,'[redacted]'))
+        store.settle_plan(owner,reservation['request_id'],cost,record)
+        if cost is None:raise ValueError('BUDGET_EXHAUSTED: provider cost missing; reservation retained until reconciliation.')
+        choice=data['choices'][0];raw=choice['message']['content']
+        if not isinstance(raw,str):raise ValueError('SCHEMA_INVALID: provider did not return text.')
+        return raw.replace(key,'[redacted]'),choice.get('finish_reason','')
+    except (httpx.HTTPError,KeyError,IndexError,TypeError,json.JSONDecodeError):
+        raise ValueError('Provider response unavailable or malformed. Cost may be unconfirmed; inspect usage before retrying.') from None

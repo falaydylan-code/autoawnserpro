@@ -8,6 +8,7 @@
    evidence and verification -> executeAction (the gate) -> the run loop. */
 import './coverage.js';
 import './visual.js';
+import './planner_runtime.js';
 
 const DEFAULT_BACKEND = 'https://positive-tranquility-production-9fdc.up.railway.app';
 const PROTOCOL = 3;
@@ -56,8 +57,9 @@ const pause = ms => new Promise(r => setTimeout(r, ms));
 const stopped = () => state.stopRequested;
 
 async function settings() {
-  const s = await chrome.storage.local.get(['backend', 'token', 'model', 'note', 'advance', 'auto_submit', 'badges', 'double_check', 'spend_limit']);
+  const s = await chrome.storage.local.get(['backend', 'token', 'model', 'note', 'advance', 'auto_submit', 'badges', 'double_check', 'spend_limit', 'planner_enabled', 'check_work']);
   return {
+    planner_enabled: s.planner_enabled === true, check_work: s.check_work === true,
     backend: (s.backend || DEFAULT_BACKEND).replace(/\/+$/, ''), token: s.token || '', model: s.model || '', note: s.note || '',
     advance: s.advance === true, auto_submit: s.auto_submit === true, badges: s.badges !== false, double_check: s.double_check !== false,
     spend_limit: Number.isFinite(Number(s.spend_limit)) && Number(s.spend_limit) > 0 ? Number(s.spend_limit) : 2.0,
@@ -290,7 +292,7 @@ async function compatible(config) {
   const r = await fetch(config.backend + '/api/capabilities', {signal: decisionAbort?.signal}).catch(() => null);
   if (!r || !r.ok) throw new Error('Backend update required: this extension (' + chrome.runtime.getManifest().version + ') needs protocol ' + PROTOCOL + ' and the backend did not answer /api/capabilities. Deploy the matching backend. No model call was made.');
   const c = await r.json();
-  if (c.protocol !== PROTOCOL) throw new Error('Backend update required: the backend speaks protocol ' + c.protocol + ', this extension needs ' + PROTOCOL + '. Deploy the matching backend. No model call was made.');
+  if (c.protocol !== PROTOCOL && !c.supported_protocols?.includes(PROTOCOL)) throw new Error('Backend update required: the backend speaks protocol ' + c.protocol + ', this extension needs ' + PROTOCOL + '. Deploy the matching backend. No model call was made.');
   const missing = REQUIRED_FEATURES.filter(x => !c.features?.includes(x));
   if (missing.length) throw new Error('Backend update required: missing ' + missing.join(', ') + '. No model call was made.');
 }
@@ -824,11 +826,52 @@ async function run(tabId) {
   }
 }
 
+// New coordinator is opt-in until live release gates pass. The legacy loop
+// remains an explicit rollback path; no automatic downgrade after a failed task.
+let plannerEngine=null,launching=false;
+async function plannerRequest(phase,body,signal){
+  const config=await settings();let token=runToken||config.token;
+  if(!token)token=await guestToken(config.backend);runToken=token;
+  const controller=new AbortController(),onStop=()=>controller.abort(),timeout=setTimeout(()=>controller.abort(),60000);
+  signal.addEventListener('abort',onStop,{once:true});if(signal.aborted)controller.abort();
+  try{const response=await fetch(config.backend+'/api/agent/'+phase,{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify(body),signal:controller.signal});
+    const data=await response.json();if(!response.ok&&!data.detail)data.detail='Backend HTTP '+response.status;return data;
+  }catch{throw new Error(signal.aborted?'CANCELLED: stopped while waiting for the model.':'Provider request did not complete within 60 seconds or connection failed. Reservation remains pending; inspect usage before resuming.');}
+  finally{clearTimeout(timeout);signal.removeEventListener('abort',onStop)}
+}
+function plannerBridge(){return {bound:boundTab,allowed:origin=>siteOf(origin)===runSite,stopped,config:settings,request:plannerRequest,
+  viewport:async id=>{const r=await chrome.debugger.sendCommand({tabId:id},'Page.getLayoutMetrics');const v=r.cssVisualViewport||r.visualViewport;return {width:v.clientWidth,height:v.clientHeight}},
+  emit:row=>{if(Number.isFinite(row.cost))state.cost+=row.cost;if(row.input_tokens!=null)row.tokens=String(row.input_tokens)+' in / '+String(row.output_tokens||0)+' out';emit(row)},
+  progress:(done,total,questions,cost,steps)=>{Object.assign(state,{questions,cost,steps,progress:done+' of '+total+' parts done'});emit({kind:'progress',message:state.progress})}}}
+async function runPlanner(tabId,config,resume=false){
+  Object.assign(state,{running:true,stopRequested:false,tabId,steps:0,questions:0,cost:0,progress:'',log:[]});decisionAbort=new AbortController();
+  const keepAlive=setInterval(()=>chrome.runtime.getPlatformInfo().catch(()=>{}),20000);
+  try{
+    const tab=await chrome.tabs.get(tabId);runOrigin=new URL(tab.url).origin;runSite=siteOf(tab.url);runUrl=tab.url;runTitle=tab.title;runToken='';
+    const response=await fetch(config.backend+'/api/capabilities?protocol=4',{signal:decisionAbort.signal});const caps=await response.json();
+    if(caps.protocol!==4||!['task_plans','stable_slots','typed_verification','bounded_repair'].every(f=>caps.features?.includes(f)))throw new Error('Backend update required: planner preview needs protocol 4. No paid request was made.');
+    await boundTab(tabId);await AssignmentVisual.attach(tabId);
+    const held=(await chrome.storage.local.get('planner_run')).planner_run;
+    if(resume&&(!held||held.tab_id!==tabId||held.url!==tab.url))throw new Error('Cannot resume: select the original assignment tab and URL.');
+    if(resume&&held.pending_request){
+      const token=config.token||await guestToken(config.backend);runToken=token;
+      const reconciliation=await fetch(config.backend+'/api/agent/runs/'+encodeURIComponent(held.id),{headers:{Authorization:'Bearer '+token},signal:decisionAbort.signal});
+      if(!reconciliation.ok)throw new Error('Saved request usage cannot be reconciled. Review provider usage before resuming.');
+      const usage=await reconciliation.json();const call=usage.calls.find(c=>c.request_id===held.pending_request);
+      if(!call||call.status!=='settled')throw new Error('Previous provider charge is still unconfirmed. Reconcile usage before resuming.');held.pending_request=null;held.cost=usage.cost;
+    }
+    plannerEngine=new AssignmentPlanner.Engine(plannerBridge(),tabId,config,resume?held:null);plannerEngine.ledger.tab_id=tabId;plannerEngine.ledger.url=tab.url;
+    await plannerEngine.run();
+  }catch(e){emit({kind:'error',message:e.message})}
+  finally{clearInterval(keepAlive);await AssignmentVisual.detach();state.running=false;decisionAbort=null;plannerEngine=null;chrome.runtime.sendMessage({type:'finished',state:snapshot()}).catch(()=>{})}
+}
+async function startSelected(tabId,resume=false){if(launching||state.running)throw new Error('Already running.');launching=true;try{const config=await settings();if(!((await chrome.storage.local.get('armed')).armed))throw new Error('Arm ETH before starting.');if(config.planner_enabled)await runPlanner(tabId,config,resume);else await run(tabId)}finally{launching=false}}
+
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
   // Control messages originate in the extension panel, never a content script.
-  if (sender.tab && !String(sender.url || '').startsWith(chrome.runtime.getURL('')) && ['start', 'stop'].includes(message.type)) { reply({ok: false, error: 'Use the extension panel.'}); return true; }
-  if (message.type === 'start') { if (state.running) { reply({ok: false, error: 'Already running.'}); return true; } run(message.tabId).catch(e => emit({kind: 'error', message: e.message})); reply({ok: true}); return true; }
-  if (message.type === 'stop') { state.stopRequested = true; decisionAbort?.abort(); AssignmentVisual.detach(); if (state.tabId) for (const frameId of frameIds) chrome.tabs.sendMessage(state.tabId, {type: 'cancel'}, {frameId}).catch(() => {}); reply({ok: true}); return true; }
+  if (sender.tab && !String(sender.url || '').startsWith(chrome.runtime.getURL('')) && ['start', 'resume', 'stop'].includes(message.type)) { reply({ok: false, error: 'Use the extension panel.'}); return true; }
+  if (message.type === 'start' || message.type === 'resume') { if (state.running || launching) { reply({ok: false, error: 'Already running.'}); return true; } startSelected(message.tabId,message.type==='resume').catch(e => emit({kind: 'error', message: e.message})); reply({ok: true}); return true; }
+  if (message.type === 'stop') { state.stopRequested = true; plannerEngine?.stop(); decisionAbort?.abort(); AssignmentVisual.detach(); if (state.tabId) for (const frameId of frameIds) chrome.tabs.sendMessage(state.tabId, {type: 'cancel'}, {frameId}).catch(() => {}); reply({ok: true}); return true; }
   if (message.type === 'status') { reply({...snapshot(), log: state.log}); return true; }
   return false;
 });
@@ -838,6 +881,7 @@ chrome.runtime.onInstalled.addListener(() => chrome.sidePanel.setPanelBehavior({
 // DevTools-only integration surface for the loaded-extension tests. Not
 // reachable from web pages.
 globalThis.__assignmentHarness = {
+  plannerBridge, runPlanner,
   injectAll, observeAllFrames, observeResilient: observeResilientFor, boundTab, actOnRef, executeAction, refreshEvidence, waitForEffect, capture, compatible, makeSnapshot, currentSnapshot, verifyVisual, run, settle, perform, reveal, siteOf,
   setSnapshot(s) { decisionSnapshot = s; }, setDoubleCheck(v) { doubleCheck = !!v; }, setPendingMenu(m) { pendingMenu = m; },
   get coverage() { return coverage; }, get state() { return state; }, get pendingMenu() { return pendingMenu; },

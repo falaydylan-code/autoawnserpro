@@ -1,3 +1,8 @@
+# Protocol 4 planner preview
+
+See [PLANNER_ROLLOUT.md](PLANNER_ROLLOUT.md) for the new opt-in architecture.
+The description below is retained for the protocol-3 rollback loop.
+
 # Architecture
 
 Two halves that talk over HTTPS.
