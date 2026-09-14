@@ -20,7 +20,16 @@ desired option is refused (GUARD_REJECTED) and an `[active]` focus annotation in
 readback still verifies — new `tests/test_planner_acceptance.py` +
 `tests/fixtures/planner_selection.html`.
 
-**Verified:** `python -m pytest -q` = **233 passed** (231 + the 2 new). The 20
+**Deployed:** Refreshed `deploy-source/` from current source (dropped the stale
+0.8.0 copy and Codex's `planner-0.9.0/` staging subfolder) and `railway up`'d the
+0.9.0 backend. Post-deploy verification caught a real bug: `/api/capabilities`
+used `Literal[3,4]` for the query param, which 422'd the planner's own
+`?protocol=4` request — so the preview could never have started. Fixed to a
+coerced int (commit a3181b6), redeployed, and confirmed live: `/api/health` ok,
+`?protocol=4` -> protocol 4, default -> protocol 3.
+
+**Verified:** `python -m pytest -q` = **234 passed** (231 + 2 acceptance + 1
+capabilities-negotiation regression). The 20
 loaded-extension planner-executor cases (radio one-plan/no-vision, 20 McGraw
 dropdowns one plan, reused menu nodes below the fold, frames + sensitive
 exclusion, ordering, nested-transform SVG, opaque-graph visual fallback,
