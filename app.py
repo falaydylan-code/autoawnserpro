@@ -420,13 +420,19 @@ class Observation(BaseModel):
 
 
 @app.get('/api/capabilities')
-async def capabilities(protocol: Literal[3, 4] = 3):
+async def capabilities(protocol: int = 3):
     # The extension refuses to start against a backend that does not report the
     # protocol it needs, so a stale deploy is an actionable message, not a loop.
     # Protocol 4 adds the planner path (a whole-question plan of typed tasks,
     # deterministic execution, harness-owned verification, bounded repair). The
     # protocol-3 features remain listed so the retained per-action fallback path
     # keeps working against the same backend.
+    #
+    # `protocol` is a plain int query param (FastAPI coerces "4" -> 4) and is
+    # echoed only when it names a protocol this backend speaks; anything else
+    # falls back to the protocol-3 default rather than 422-ing the negotiation,
+    # so the planner's `?protocol=4` request actually returns protocol 4.
+    protocol = protocol if protocol in (3, 4) else 3
     return {'protocol': protocol, 'extension': '0.9.0', 'supported_protocols': [3,4],
             'planner_release': 'preview',
             'features': ['parts', 'ordering', 'visual_input', 'visual_verification', 'browser_input', 'page_states', 'no_step_ceiling',

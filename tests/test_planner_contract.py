@@ -68,3 +68,15 @@ def test_plan_endpoint_meters_once_and_preserves_key(monkeypatch,tmp_path):
   again=client.post('/api/agent/plan',json=body,headers=headers);assert again.status_code==400 and len(sent)==1
   assert secret not in r.text+again.text
   assert secret.encode() not in (tmp_path/'agent.db').read_bytes()
+
+def test_capabilities_negotiates_protocol_without_422():
+ # The planner startup fetches /api/capabilities?protocol=4; the query int must
+ # coerce and echo 4 (not 422), while the default stays 3 for loaded 0.8 builds.
+ import app
+ from fastapi.testclient import TestClient
+ with TestClient(app.app) as client:
+  assert client.get('/api/capabilities').json()['protocol']==3
+  up=client.get('/api/capabilities?protocol=4').json()
+  assert up['protocol']==4 and up['supported_protocols']==[3,4] and up['planner_release']=='preview'
+  assert 'task_plans' in up['features']
+  assert client.get('/api/capabilities?protocol=9').json()['protocol']==3   # unknown falls back, no 422
