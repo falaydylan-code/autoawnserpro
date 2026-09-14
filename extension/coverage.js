@@ -6,7 +6,7 @@
   // multiple-choice options are styled buttons, not native radios; without it a
   // correct click could never be verified and the question could never advance.
   const ANSWER_ROLES = ['textbox','select','radio','checkbox','option','switch','combobox','spinbutton'];
-  const answerTarget = e => ((ANSWER_ROLES.includes(e.role) || e.dropdown || e.opaque || (e.role==='button' && e.choice)) && !e.control) || e.drag==='target';
+  const answerTarget = e => ((ANSWER_ROLES.includes(e.role) || e.dropdown || e.opaque || e.role==='graph' || e.role==='point' || (e.role==='button' && e.choice)) && !e.control) || e.drag==='target';
   function questionId(text, hint='') {
     const stem = normalize(hint || text).replace(/\bpart\s+[a-z0-9]+\s*[:.)-]?/g, '').trim();
     let hash = 2166136261;
@@ -34,24 +34,36 @@
       // the plan-change guard and killed the run. And when the page names its
       // questions (data-question-id), a different name is a different question
       // whatever the controls say.
-      if (fresh && this.current && this.current.parts.size) {
-        const namedDifferently = hint && this.current.hint && hint !== this.current.hint;
-        const unfinished = [...this.current.parts.values()].filter(p => !p.verified);
-        const owned = new Set(unfinished.map(p => p.target_key).filter(Boolean));
-        const incomingKeys = (action.parts || []).map(p => page.elements.find(e => e.ref === p.ref)?.key).filter(Boolean);
-        const onScreen = new Set(page.elements.map(e => e.key));
-        const overlap = incomingKeys.some(k => owned.has(k));
-        // "All my unfinished controls are still on screen" only says the old
-        // question has not gone away. It cannot say the incoming parts belong
-        // to it: on a page showing several questions at once, parts aimed at
-        // entirely different controls are a different question. So that
-        // signal counts only for a read that brings no parts of its own.
-        const stillHere = incomingKeys.length === 0 && owned.size > 0 && [...owned].every(k => onScreen.has(k));
-        if (!namedDifferently && (overlap || stillHere)) fresh = false;
+      // The answer controls are a question's real identity, not its wording. A
+      // control this run already owns belongs to the question that owns it,
+      // whichever question the model's rephrased stem hashed to. This is what
+      // stops a rephrased re-read of a big table splitting it into twins.
+      const incoming = (action.parts || []).map(p => ({key: page.elements.find(e => e.ref === p.ref)?.key, answer: normalize(p.answer)})).filter(p => p.key);
+      const onScreen = new Set(page.elements.map(e => e.key));
+      let host = null;
+      if (incoming.length) {
+        // Prefer a question that already owns one of these controls, unless the
+        // page NAMES its questions and names a different one, or the re-read
+        // gives an owned control a genuinely different answer (the input reused
+        // for the next question). Otherwise fall back to the id hash.
+        for (const q of this.questions.values()) {
+          if (hint && q.hint && hint !== q.hint) continue;
+          if (q.attempt?.locked) continue;                   // a graded, locked question never adopts new work
+          const shares = incoming.some(i => [...q.parts.values()].some(pt => pt.target_key === i.key && !pt.retired
+            && (!pt.verified || i.answer === normalize(pt.answer) || i.answer.includes(normalize(pt.answer)) || normalize(pt.answer).includes(i.answer))));
+          if (shares) { host = q; break; }
+        }
+      } else if (this.current && this.current.parts.size) {
+        // A plan-less re-read stays on the current question while its unfinished
+        // controls are still on screen.
+        const owned = [...this.current.parts.values()].filter(p => !p.verified).map(p => p.target_key).filter(Boolean);
+        if (owned.length && owned.every(k => onScreen.has(k))) host = this.current;
       }
-      let q = fresh ? {id, text:action.question, hint, plan:action.plan || '', parts:new Map(), tabs:new Map(), steps:0, submitted:false} :
-        (this.questions.get(id) || this.current);
-      if (fresh) this.questions.set(id, q);
+      if (host) fresh = false;
+      let q = host || (fresh ? {id, text:action.question, hint, plan:action.plan || '', parts:new Map(), tabs:new Map(), steps:0, submitted:false} :
+        (this.questions.get(id) || this.current));
+      fresh = !this.questions.has(q.id) && q !== this.current;
+      if (fresh || host) this.questions.set(q.id, q);
       this.current = q;
       // Every control on screen when the plan was FIRST made, and never widened:
       // a later re-read may be a mechanical recheck that echoes the old parts,
@@ -63,11 +75,18 @@
       // whose refs point at nothing usable, has decided nothing yet.
       if (action.plan && !q.plan) q.plan = action.plan;
       for (let incoming of action.parts || []) {
-        const target = page.elements.find(e => e.ref === incoming.ref && (answerTarget(e)||incoming.kind==='ordering'||incoming.order?.length||incoming.sequence?.length>=2));
+        let target = page.elements.find(e => e.ref === incoming.ref && (answerTarget(e)||incoming.kind==='ordering'||incoming.order?.length||incoming.sequence?.length>=2));
+        // A menu option is not where an answer lives; the cell that owns the
+        // menu is. A plan that points at the option is re-aimed at its cell.
+        if (target?.role === 'option' && target.owner_ref) {
+          const cell = page.elements.find(e => e.ref === target.owner_ref);
+          if (cell) { if (!incoming.answer) incoming = {...incoming, answer: target.name}; target = cell; }
+        }
         // One cell, one part. A re-read that gives an owned cell a new id is
         // talking about the existing part; adopt its id so the ledger does not
         // grow twins that both track the same control.
-        const owner = target && !q.parts.has(incoming.id)
+        // -- except a graph: several points legitimately share one surface.
+        const owner = target && target.role !== 'graph' && !q.parts.has(incoming.id)
           ? [...q.parts.values()].find(p => p.target_key === target.key) : null;
         if (owner) incoming = {...incoming, id: owner.id};
         const prev = q.parts.get(incoming.id);
@@ -78,19 +97,23 @@
           // the menu is open -- is not that, and stopping there killed a run
           // that had planned all twenty cells correctly. One answer containing
           // the other, before entry, is a refinement and is kept.
-          const a=normalize(prev.answer), b=normalize(incoming.answer);
-          const refinement=!prev.entered && (a.includes(b) || b.includes(a));
-          if (refinement) { prev.answer=incoming.answer; prev.refined=true; }
-          else if ((prev.revisions||0) >= 1) {
-            // Twice is the model changing its mind back and forth. Stop.
+          // Nothing has been entered yet: the model is still deciding what the
+          // answer is. Changing its mind then is re-planning, not oscillation,
+          // and a model reasoning its way from a bad first guess to a right one
+          // must be allowed to. The oscillation guard is on ENTERED answers.
+          if (!prev.entered && !prev.everEntered) {
+            prev.answer = incoming.answer;
+          } else if ((prev.revisions || 0) >= 1 && !q.retryable) {
+            // It has been entered, then changed, and is being changed again:
+            // the flip-flop this guard exists for. Stop.
             throw new Error(`Plan changed again for ${prev.what}: "${prev.answer}" to "${incoming.answer}". Stop and review before replacing a committed answer.`);
           } else {
-            // Once is a correction -- or a slip -- and either way one garbled
-            // field must not end a twenty-part plan. Take it, undo the part's
-            // progress so it is re-entered and re-verified, and say so loudly.
+            // Entered once, now revised: take it, undo the part's progress so
+            // it is re-entered and re-verified, and say so loudly.
             this.revised.push(`${prev.what}: "${prev.answer}" -> "${incoming.answer}"`);
             prev.answer=incoming.answer; prev.revisions=(prev.revisions||0)+1;
             prev.entered=false; prev.verified=false; prev.visualConfirmed=false; prev.domVerified=undefined; prev.evidence=null;
+            prev.target_key='';                                   // a revised answer may live in a different control
           }
         }
         const part = prev || {...incoming, entered:false, verified:false, target_key:'', evidence:null};
@@ -163,24 +186,53 @@
       const found=this.bind(action,page);
       if (!found || !outcome.ok) return;
       const {part,target}=found;
-      part.entered=true; part.verified=false;
+      part.entered=true; part.everEntered=true; part.verified=false;
       part.evidence={key:target.key,answer:part.source_label||part.answer,kind:action.action};
     }
     summary() {
       const parts=[...(this.current?.parts.values() || [])];
-      const remaining=parts.filter(p=>!p.verified).map(p=>p.what);
+      const remaining=parts.filter(p=>!p.verified&&!p.retired).map(p=>p.what);
+      const retired=parts.filter(p=>p.retired).length;
       return `${parts.filter(p=>p.verified).length} of ${parts.length} parts done`+
-        (remaining.length?'; remaining: '+remaining.join(', '):'');
+        (remaining.length?'; remaining: '+remaining.join(', '):'')+
+        (retired?`; ${retired} retired by graded feedback`:'')+
+        (this.current?.attempt?`; graded ${this.current.attempt.outcome}`:'');
     }
-    ledger() { return [...(this.current?.parts.values() || [])].map(({id,what,answer,entered,verified,target_key,source_key='',source_label='',kind='value',sequence=[]})=>({id,what,answer,entered,verified,target_key,source_key,source_label,kind,sequence})); }
-    budget() {return Math.min(100,6+4*(this.current?.parts.size || 1));}
-    outstanding(all=true) {
+    // The page graded this attempt and will not take more input. Record the
+    // outcome, stop owing the unfinished parts, and never call them correct.
+    retire(outcome, feedback) {
+      const q=this.current; if(!q) return [];
+      q.attempt={outcome,feedback:(feedback||'').slice(0,120),locked:true};
+      const retired=[];
+      for(const p of q.parts.values()) if(!p.verified){p.retired=true;retired.push(p.what);}
+      return retired;
+    }
+    // Editable feedback: the page allows another try, so a revised answer is a
+    // new attempt rather than the model changing its mind.
+    allowRetry(feedback){const q=this.current;if(!q)return;q.retryable=true;q.attempt={outcome:'incorrect',feedback:(feedback||'').slice(0,120),locked:false};for(const p of q.parts.values())p.revisions=0;}
+    ledger() { return [...(this.current?.parts.values() || [])].map(({id,what,answer,entered,verified,target_key,source_key='',source_label='',kind='value',sequence=[],retired=false})=>({id,what,answer,entered,verified,retired,target_key,source_key,source_label,kind,sequence})); }
+    // A bounded retry allowance per question, not a ceiling on healthy work:
+    // enough for every part plus discovery, opening menus and corrections.
+    budget() {return Math.min(240,10+8*(this.current?.parts.size || 1));}
+    // scope 'nav' (default): what still blocks moving on -- a locked question is
+    // done. scope 'submit': what blocks handing in the whole assignment -- a
+    // locked question whose parts were retired without being verified (wrong or
+    // unfinished) still counts, because you must not hand in an incomplete or
+    // incorrect assignment. `all=false` limits to the current question.
+    outstanding(all=true, scope='nav') {
       const questions=all?[...this.questions.values()]:[this.current].filter(Boolean);
       if(!questions.length)return ['No question has been planned'];
       const missing=[];
       for(const q of questions){
+        if(q.attempt?.locked){
+          if(scope==='submit'){
+            const unmet=[...q.parts.values()].filter(p=>!p.verified);
+            if(unmet.length)missing.push(...unmet.map(p=>p.what+' ('+(q.attempt.outcome||'graded')+', not verified)'));
+          }
+          continue;
+        }
         if(!q.parts.size)missing.push('No parts planned for '+q.text);
-        missing.push(...[...q.parts.values()].filter(p=>!p.verified).map(p=>p.what));
+        missing.push(...[...q.parts.values()].filter(p=>!p.verified&&!p.retired).map(p=>p.what));
         missing.push(...[...q.tabs.values()].filter(t=>!t.visited).map(t=>t.name+' has not been inspected'));
       }
       return missing;
@@ -191,7 +243,7 @@
       if(!activating||!target)return '';
       if(target.control==='terminal') {
         if(!config.auto_submit)return 'Hand-in is switched off.';
-        const remaining=this.outstanding();
+        const remaining=this.outstanding(true,'submit');
         if(remaining.length)return 'Cannot hand in; outstanding: '+remaining.join(', ');
         // Every control the extension would treat as an answer has to be
         // accounted for before hand-in, not only text boxes. Siblings of a
@@ -207,7 +259,7 @@
         const independent=e=>e.role==='checkbox'||e.role==='switch';
         const covered=e=>e.group!=null && boundGroups.has(e.group) && (exclusive(e) || (independent(e) && seenAtPlan.has(e.key)));
         const orderMembers=new Set([...this.questions.values()].flatMap(q=>[...q.parts.values()].filter(p=>p.kind==='ordering'&&p.verified).flatMap(p=>p.order_keys||[])));
-        const unplanned=page.elements.filter(e=>!e.disabled && answerTarget(e) && !bound.has(e.key) && !orderMembers.has(e.key) && !covered(e));
+        const unplanned=page.elements.filter(e=>!e.disabled && answerTarget(e) && e.role!=='graph' && !bound.has(e.key) && !orderMembers.has(e.key) && !covered(e));
         if(unplanned.length)return 'Cannot hand in; unplanned answer controls: '+unplanned.map(e=>e.name||e.blank||e.key).join(', ');
         const blockers=(page.warnings||[]).filter(w=>!w.startsWith('Some custom elements expose no open shadow root'));
         if(blockers.length)return 'Cannot hand in while observation limitations remain: '+blockers.join('; ');
