@@ -34,6 +34,7 @@ const entries = [];
 
 function addRow(row) {
   entries.push(row);
+  paintActivity(row);
   if ($('log').querySelector('.muted')) $('log').replaceChildren();
 
   const li = document.createElement('li');
@@ -102,6 +103,7 @@ $('copylog').onclick = async () => {
     if (e.tokens) bits.push('  tokens: ' + e.tokens + (e.cost != null ? '  cost: $' + Number(e.cost).toFixed(5) : ''));
     if (e.working) bits.push('  thinking: ' + e.working);
     if (e.raw) bits.push('  raw: ' + e.raw);
+    for(const key of ['phase','question_key','slot_key','task_id','adapter','requested_value','actual','failure_code','document_id','observation_id','action_executed','entry_verified','save_state','grade_state','duration'])if(e[key]!=null)bits.push('  '+key+': '+JSON.stringify(e[key]));
     return bits.join('\n');
   });
   const header = `Assignment Lab 2.0 log — ${new Date().toLocaleString()}\n`
@@ -122,6 +124,16 @@ function paintState(state) {
   $('steps').textContent = state.steps;
   $('cost').textContent = '$' + (state.cost || 0).toFixed(4);
   $('progress').textContent = state.progress || 'No parts planned yet.';
+  document.body.classList.toggle('running', running);
+  const parts = (state.progress || '').match(/(\d+) of (\d+) parts/);
+  $('part-meter').max = parts ? Math.max(1, Number(parts[2])) : 1;
+  $('part-meter').value = parts ? Number(parts[1]) : 0;
+  if (running) {
+    if (!$('status-pill').dataset.tone) $('status-pill').textContent = 'Working';
+    $('task-title').textContent = 'Working through your assignment';
+    if ($('task-description').querySelector('br')) $('task-description').textContent = 'Reading, answering, and checking each part.';
+  }
+  else if ($('status-pill').textContent === 'Working') $('status-pill').textContent = 'Stopped';
   paintEth();
 }
 
@@ -247,7 +259,7 @@ $('stop').onclick = async () => {
 $('advance').onchange = async () => {
   await chrome.storage.local.set({ advance: $('advance').checked });
 };
-for (const id of ['auto_submit', 'badges', 'double_check']) {
+for (const id of ['auto_submit', 'badges', 'double_check', 'planner_enabled', 'check_work']) {
   $(id).onchange = () => chrome.storage.local.set({ [id]: $(id).checked });
 }
 
@@ -255,7 +267,8 @@ $('save').onclick = async () => {
   await chrome.storage.local.set({
     backend: $('backend').value.trim() || DEFAULT_BACKEND,
     model: $('model').value.trim(),
-    note: $('note').value.trim()
+    note: $('note').value.trim(),
+    spend_limit: Number($('spend_limit').value) > 0 ? Number($('spend_limit').value) : 2.0
   });
   banner('Saved.');
 };
@@ -269,7 +282,10 @@ chrome.runtime.onMessage.addListener((message) => {
 });
 
 (async function boot() {
-  const stored = await chrome.storage.local.get(['backend', 'model', 'note', 'armed', 'advance', 'auto_submit', 'badges', 'double_check']);
+  const stored = await chrome.storage.local.get(['backend', 'model', 'note', 'armed', 'advance', 'auto_submit', 'badges', 'double_check', 'spend_limit', 'planner_enabled', 'check_work']);
+  $('planner_enabled').checked = stored.planner_enabled === true;
+  $('check_work').checked = stored.check_work === true;
+  $('spend_limit').value = stored.spend_limit || 2.0;
   $('backend').value = stored.backend || DEFAULT_BACKEND;
   $('model').value = stored.model || '';
   $('note').value = stored.note || '';
@@ -294,3 +310,62 @@ chrome.runtime.onMessage.addListener((message) => {
   chrome.tabs.onActivated.addListener(refreshPage);
   chrome.tabs.onUpdated.addListener(refreshPage);
 })();
+
+
+function paintActivity(row) {
+  const labels = {think:'Planning next action', act:'Interacting with the page', question:'Reading your question', progress:'Checking progress', error:'Needs help', stop:'Stopped', submitted:'Submission sent'};
+  if(row.phase){$('activity-title').textContent=({OBSERVE:'Reading question',PLAN:'Planning answers',EXECUTE:'Entering answers',VERIFY:'Verifying',INSPECT:'Inspecting widget',REPAIR:'Repairing task',LOCAL_RECOVERY:'Recovering widget',NEEDS_REVIEW:'Needs review',CANCELLED:'Stopped',FINISH:'Finished',ADVANCE:'Next question'})[row.phase]||row.phase;$('activity-detail').textContent=row.message;}
+  if (!row.phase && labels[row.kind]) {
+    $('activity-title').textContent = labels[row.kind];
+    $('activity-detail').textContent = row.detail || row.message;
+  }
+  if (row.kind === 'question') {
+    $('task-title').textContent = 'Working through your assignment';
+    $('task-description').textContent = row.message;
+  }
+  if (row.kind === 'error' || row.kind === 'stop') {
+    $('status-pill').textContent = labels[row.kind];
+    $('status-pill').dataset.tone = row.kind;
+  } else if (row.kind === 'info') {
+    $('status-pill').dataset.tone = '';
+  }
+}
+function showSettings(open) {
+  $('settings-view').hidden = !open;
+  $('workspace').hidden = open;
+  $('settings-toggle').setAttribute('aria-expanded', String(open));
+  $('settings-toggle').setAttribute('aria-label', open ? 'Close settings' : 'Open settings');
+}
+$('settings-toggle').onclick = () => showSettings($('settings-view').hidden);
+$('settings-back').onclick = () => showSettings(false);
+function displayPreferences() {
+  $('activity-log').hidden = !$('show-log').checked;
+  $('cost').parentElement.hidden = !$('show-cost').checked;
+}
+for (const id of ['show-log', 'show-cost']) $(id).onchange = () => {
+  displayPreferences();
+  chrome.storage.local.set({[id]: $(id).checked});
+};
+function paintSummaries() {
+  $('continue-summary').textContent = 'Auto-continue ' + ($('advance').checked ? 'on' : 'off');
+  $('submit-summary').textContent = 'Submission ' + ($('auto_submit').checked ? 'on' : 'off');
+}
+for (const id of ['advance', 'auto_submit']) $(id).addEventListener('change', paintSummaries);
+chrome.storage.local.get(['show-log', 'show-cost', 'advance', 'auto_submit']).then(stored => {
+  $('show-log').checked = stored['show-log'] !== false;
+  $('show-cost').checked = stored['show-cost'] !== false;
+  $('continue-summary').textContent = 'Auto-continue ' + (stored.advance ? 'on' : 'off');
+  $('submit-summary').textContent = 'Submission ' + (stored.auto_submit ? 'on' : 'off');
+  displayPreferences();
+});
+
+$('resume-run').onclick = async () => {
+  if(!armed || !tabInfo) {banner('Arm ETH and select the original assignment tab to resume.',true);return;}
+  if(!$('planner_enabled').checked) {banner('Enable the structured planner to resume its saved run.',true);return;}
+  const result=await chrome.runtime.sendMessage({type:'resume',tabId:tabInfo.id});
+  if(!result?.ok)banner(result?.error||'Could not resume.',true);else showSettings(false);
+};
+
+chrome.storage.local.get(['planner_run','planner_enabled']).then(({planner_run,planner_enabled})=>{
+  if(planner_enabled&&planner_run?.status==='running'&&!running)banner('A saved run was interrupted. Open Settings and choose Resume saved planner run to re-check entered answers before continuing.');
+});
