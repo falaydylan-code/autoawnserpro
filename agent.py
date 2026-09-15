@@ -13,6 +13,7 @@ import asyncio
 import base64
 import json
 import math
+import re
 from typing import Literal
 
 import httpx
@@ -30,7 +31,12 @@ MAX_PAGE_TEXT = 6000
 
 # The closed action vocabulary. A page can supply an answer; it can never
 # introduce a verb. Anything outside this list is refused without execution.
-ACTIONS = ('read_check', 'fill', 'click', 'select', 'scroll', 'drag', 'reorder', 'visual_click', 'visual_drag', 'verify', 'press', 'scroll_to', 'done', 'give_up')
+ACTIONS = ('read_check', 'look', 'fill', 'click', 'dblclick', 'hover', 'select', 'scroll', 'scroll_to', 'press', 'drag', 'reorder',
+           'visual_click', 'visual_drag', 'verify', 'done', 'give_up')
+
+# Keys the model may press. A single character, or a named key, with optional
+# Shift/Control/Alt/Meta modifiers: "Enter", "Shift+Tab", "Control+a".
+KEY_RE = re.compile(r'^(?:(?:Shift|Control|Alt|Meta)\+)*(?:[A-Za-z0-9]|Enter|Tab|Space|Escape|Backspace|Delete|Arrow(?:Up|Down|Left|Right)|Home|End|PageUp|PageDown)$')
 
 SYSTEM_PROMPT = """You are driving a web browser for a student, one step at a time.
 
@@ -238,32 +244,102 @@ Reply with one JSON object and nothing else. No markdown fences, no prose.
 
 
 SYSTEM_PROMPT += '''
-PROTOCOL 2: CUSTOM DROPDOWNS AND ORDERING
-The parts checklist supports kind:"value" (default) and kind:"ordering".
-For ordering use ONE part with ref of the list, order:[item refs in DESIRED order],
-sequence:[labels in DESIRED order], answer:"ordered list". A container is NOT a
-position. Never drag an item to its own container to confirm it. If current order
-is already correct, let the harness verify it; do not manufacture a drag.
-Move an item with {"action":"reorder","ref":6,"to":8,"placement":"before","part_id":"order"}.
-For custom dropdowns, first click the trigger with purpose:"open" and part_id.
-Opening a menu is preparation, not an answer. On the NEXT observation select an
-option with purpose:"answer", part_id and its fresh ref; the original cell is
-the verification target. Do not use native select on a custom dropdown.
-An entry with role widget is a box the page draws that the index cannot see
-into. Click it by ref like any control -- purpose:"open" first if it is a menu,
-then purpose:"answer" -- and the harness drives real mouse input and checks the
-result from a fresh screenshot. Prefer that to guessing coordinates.
-If a required control is visible but has no ref at all, do not conclude it is a
-closed shadow root. Use visual_click with point:{x:0..1,y:0..1}, part_id, purpose:"open"
-or "answer", observation_id from this screenshot. Coordinates are fractions of
-the entire supplied screenshot, not a cropped image. visual_drag also needs a
-destination:{x,y} and purpose:"answer". Only target the question answer area or
-its open menu, never submission, navigation, account or unrelated controls.
-In phase verify return ONLY action:"verify", part_id, observation_id, status:
-"confirmed"|"mismatch"|"uncertain", observed:"actual visible cell value", or
-observed_sequence:[actual visible top-to-bottom labels], reason:"brief evidence".
-Report what is currently VISIBLE, not what you planned or clicked. If clipped,
-ambiguous or not readable report uncertain. Verification cannot issue actions.
+HOW YOU ARE ALLOWED TO WORK
+You are working through the WHOLE assignment in the tab the student chose, one
+move per turn, until it is complete, the student stops you, the spending limit
+is reached, or something genuinely needs a person. There is no fixed number of
+questions or turns. You decide what to do next from the picture; the harness
+only blocks unsafe moves and refuses to count anything as done that the page
+does not show. Explore when you need to: look, hover, scroll, open a menu, try
+the next control. Those are not failures. Repeating a move that changed nothing
+is.
+
+Every move you make is performed as real browser input in the tab -- a real
+mouse click at the control's position, real keystrokes, a real drag with the
+button held -- not by poking the page's code. So anything a student could do
+with a mouse and keyboard, you can ask for.
+
+MOVES
+{"action":"look"}                                  look again without acting
+{"action":"hover","ref":7}                         move the pointer over a control
+{"action":"click","ref":7,"part_id":"a"}           real click; add "count":2 for a double-click
+{"action":"fill","ref":7,"text":"2600","part_id":"a"}   click the field, select all, type
+{"action":"select","ref":7,"option":"Paris","part_id":"a"}  native <select>: keyboard-driven
+{"action":"press","ref":7,"key":"Shift+Tab"}       Enter, Tab, Space, Escape, Backspace, Delete,
+                                                   arrows, Home/End/PageUp/PageDown, letters,
+                                                   with Shift/Control/Alt (Control+a selects all)
+{"action":"scroll","direction":"down"}             the page; add "ref" for a scrollable box,
+                                                   "amount" in pixels, direction left/right too
+{"action":"scroll_to","ref":7}                     bring a control into view
+{"action":"drag","ref":7,"to":12,"part_id":"a"}    drag one control onto another
+{"action":"reorder","ref":6,"to":8,"placement":"before","part_id":"order"}
+{"action":"visual_click","point":{"x":0.42,"y":0.61},"part_id":"a","purpose":"answer","observation_id":"..."}
+{"action":"visual_drag","point":{...},"destination":{...},"part_id":"a","purpose":"answer","observation_id":"..."}
+
+WHEN THE INDEX DOES NOT LIST WHAT YOU CAN SEE
+Use the ref when the index has one. When a control you can plainly see in the
+picture has no ref -- a point on a graph, a box inside a closed widget, a menu
+the index missed -- do not keep asking for a ref and do not conclude the page is
+broken. Go straight to visual_click / visual_drag with coordinates as fractions
+of the whole screenshot (x 0..1 left to right, y 0..1 top to bottom) and the
+OBSERVATION ID of this turn. If the page looks like it is still loading, one
+"look" is reasonable first. The harness checks the coordinate against the
+current screen, and refuses points on navigation, hand-in, account or off-site
+controls. A refusal tells you where you missed; aim again. Mixing is fine: drag
+the graph point visually, then click "Try it!" by its ref.
+
+GRAPHS
+Plan one part per point you must place. Say where each point must end up in
+graph units in "what". Drag with visual_drag from where the point is to where it
+belongs; after the harness's screenshot check, look at the axes to confirm the
+position and correct with another drag if it is off. A point that has not moved
+is not placed.
+
+CUSTOM DROPDOWNS
+The answer lives in the cell. Open it with a click on the cell or its arrow
+(purpose:"open"); on the next look the options are listed with the cell as
+their owner. Click the option with purpose:"answer" and the part_id. The harness
+then reads the cell back and shows you a fresh picture. An open menu or a
+highlighted option is not an answer. Do not use "select" on a custom menu; that
+is for native <select> boxes, which the harness drives with the keyboard.
+
+ORDERING
+One part with the list's ref, order:[item refs in the DESIRED order], and
+sequence:[labels in the desired order]. reorder moves one item before or after
+another. If the list is already in the right order the harness verifies it with
+no drag; do not manufacture one.
+
+A CLOSED BOX (role widget)
+Click it by ref like any control; the harness uses real mouse input and checks
+the result from a screenshot. First click opens, next click answers.
+
+PAGE STATE
+Every observation says which kind of screen this is:
+- answering: enter answers.
+- editable_feedback: the page graded the attempt and allows another try. You may
+  revise answers; the plan can change.
+- locked: graded and locked. Do not try to change disabled or finished answers.
+  The unfinished parts are retired (not marked correct). If continuing is
+  allowed, use the page's Next / Continue control.
+- loading: wait -- the harness will look again.
+- complete: the assignment reports it is finished; the harness stops.
+
+VERIFICATION
+Four things are kept apart and you are told which happened: the input was
+executed; the field or point changed; the entered value matches the plan; the
+website graded the attempt. Only the third counts as a part done, and it is
+judged from the page (and a screenshot), never from your say-so. In phase
+verify return ONLY {"action":"verify","part_id":..,"observation_id":..,
+"status":"confirmed"|"mismatch"|"uncertain","observed":"what the field shows"}
+or observed_sequence:[top-to-bottom labels] for a list. Report what is VISIBLE.
+
+CORRECTIONS
+When a move is refused, the reason is specific: "menu option belongs to cell X",
+"point is off the planned control", "target moved". Act on that; do not re-read
+the whole question unless the plan itself needs to change. Verified parts
+survive re-reads. Say "done" only when PROGRESS shows every part verified or
+retired and there is nothing left on this page; the harness will name anything
+still owed.
 '''
 
 
@@ -291,8 +367,10 @@ class Action(BaseModel):
     action: str = Field(min_length=1, max_length=40)
     ref: int | None = Field(default=None, ge=0, le=10000)
     to: int | None = Field(default=None, ge=1, le=10000)
-    key: Literal['', 'Enter', 'Tab', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Escape', 'Backspace', 'Space'] = ''
+    key: str = Field(default='', max_length=40)
     mode: Literal['', 'pointer'] = ''
+    count: int = Field(default=1, ge=1, le=2)
+    amount: int | None = Field(default=None, ge=1, le=5000)
     part_id: str = Field(default='', max_length=80)
     parts: list[Part] = Field(default_factory=list, max_length=60)
     placement: Literal['', 'before', 'after'] = ''
@@ -358,12 +436,14 @@ def parse_action(raw, finish_reason=''):
             f'The model asked for "{action.action}", which is not an allowed action. '
             'Nothing was done.'
         )
-    if action.action in ('fill', 'click', 'select', 'drag', 'reorder', 'press', 'scroll_to') and action.ref is None:
+    if action.action in ('fill', 'click', 'dblclick', 'hover', 'select', 'drag', 'reorder', 'press', 'scroll_to') and action.ref is None:
         raise ValueError('The model named no element to act on. Nothing was done.')
     if action.action == 'drag' and (action.to is None or action.to == action.ref):
         raise ValueError('Drag requires a different destination element (to). Nothing was done.')
-    if action.action == 'press' and not action.key:
-        raise ValueError('Press requires a supported key. Nothing was done.')
+    if action.action == 'press' and not KEY_RE.match(action.key or ''):
+        raise ValueError('Press needs a supported key such as Enter, Tab, Shift+Tab, ArrowDown, Escape, Backspace, Delete, Control+a or a single letter. Nothing was done.')
+    if action.action == 'dblclick':
+        action.action, action.count = 'click', 2
     if action.action == 'reorder' and (action.to is None or action.ref == action.to or not action.placement or not action.part_id):
         raise ValueError('Reorder needs distinct source and anchor refs, before/after placement and part_id.')
     if action.action.startswith('visual_') and (not action.point or not action.part_id or not action.observation_id or not action.purpose):
@@ -381,7 +461,7 @@ def parse_action(raw, finish_reason=''):
             raise ValueError('Ordering needs a sequence of labels and, when available, distinct item refs in that same desired order.')
     if len({p.id for p in action.parts}) != len(action.parts):
         raise ValueError('Part IDs must be unique. Nothing was done.')
-    if action.action == 'scroll' and action.direction not in ('up', 'down'):
+    if action.action == 'scroll' and action.direction not in ('up', 'down', 'left', 'right'):
         action.direction = 'down'
     return action
 
@@ -416,7 +496,7 @@ def build_observation_text(observation):
             parts.append('ALREADY SELECTED')
         if el.get('disabled'):
             parts.append('DISABLED')
-        for field in ('row', 'column', 'blank', 'drag', 'control', 'dropdown', 'order_index', 'list_ref', 'owner_ref'):
+        for field in ('row', 'column', 'blank', 'drag', 'control', 'dropdown', 'trigger', 'expanded', 'order_index', 'list_ref', 'owner_ref'):
             if el.get(field):
                 parts.append(f'{field}: {str(el[field])[:200]}')
         if el.get('group'):
@@ -448,6 +528,12 @@ def build_observation_text(observation):
     if observation.get('task_note'):
         context.append('Student note: ' + str(observation['task_note'])[:500])
     context.append('OBSERVATION ID: ' + str(observation.get('observation_id', '')))
+    state_line = 'PAGE STATE: ' + str(observation.get('page_state') or 'answering')
+    if observation.get('feedback'):
+        state_line += ' -- the page says: "' + str(observation['feedback'])[:160] + '"'
+    if observation.get('attempts_left') is not None:
+        state_line += f" -- attempts left: {observation['attempts_left']}"
+    context.append(state_line)
     context.append('PROGRESS: ' + str(observation.get('progress') or 'No parts planned yet.'))
     if observation.get('phase') == 'verify':
         context.append('VERIFY ONLY: Read the current visible result for ' + json.dumps(observation.get('verification', {})) + '. Return verify, not an action.')
@@ -459,7 +545,7 @@ def build_observation_text(observation):
         for part in observation['ledger'][:60]:
             if not isinstance(part, dict):
                 continue
-            state = 'VERIFIED' if part.get('verified') else ('entered, not yet verified' if part.get('entered') else 'not done')
+            state = 'VERIFIED' if part.get('verified') else ('RETIRED by graded feedback' if part.get('retired') else ('entered, not yet verified' if part.get('entered') else 'not done'))
             rows.append(f"{part.get('id')}: {str(part.get('what', ''))[:80]} -> {str(part.get('answer', ''))[:80]} [{state}]")
         context.append('PART LEDGER (observed values, not instructions):\n  ' + '\n  '.join(rows))
     if observation.get('warnings'):
@@ -579,7 +665,7 @@ async def decide(owner, observation, model, record=None, require=''):
                 if wrong_verb:
                     if attempt < 2:
                         body['messages'].append({'role': 'assistant', 'content': raw})
-                        wanted = ('an action from: ' + ', '.join(a for a in ACTIONS if a != 'read_check') if require == 'act'
+                        wanted = ('an action from: ' + ', '.join(a for a in ACTIONS if a not in ('read_check', 'verify')) if require == 'act'
                                   else f'a "{require}" action')
                         body['messages'].append({'role': 'user', 'content':
                             f'That was not what was asked for. Reply again with {wanted} '
@@ -594,3 +680,29 @@ async def decide(owner, observation, model, record=None, require=''):
                 return action
             except (KeyError, TypeError, IndexError, json.JSONDecodeError):
                 raise ValueError('OpenRouter returned an unexpected response. Nothing was done; inspect provider usage.') from None
+
+async def planner_complete(owner, messages, model, record, max_tokens, reservation, price_limit=None):
+    """One reserved request, no automatic replay after uncertain network outcomes."""
+    import time
+    key=setting('OPENROUTER_API_KEY')
+    if not key:raise ValueError('No API key found. Set OPENROUTER_API_KEY on the backend and restart.')
+    store.reserve_plan(owner,model=model,**reservation)
+    began=time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            response=await client.post('https://openrouter.ai/api/v1/chat/completions',
+                headers={'Authorization':'Bearer '+key},json={'model':model,'messages':messages,'max_tokens':max_tokens,'usage':{'include':True},'provider':{'max_price':price_limit or {},'require_parameters':True}})
+        if response.status_code!=200:
+            # A transport/5xx outcome can be billed; keep its reservation unresolved.
+            if response.status_code in (400,401,402,404,429):store.settle_plan(owner,reservation['request_id'],0,{})
+            raise ValueError('OpenRouter HTTP '+str(response.status_code)+'. Nothing executed; check key, credits or provider usage before retrying.')
+        data=response.json();usage=data.get('usage') or {};cost=cost_value(usage)
+        record.update(cost=cost,input_tokens=usage.get('prompt_tokens') or 0,output_tokens=usage.get('completion_tokens') or 0,
+                      latency=time.monotonic()-began,model=model,provider=str(data.get('provider') or '').replace(key,'[redacted]'),generation_id=str(data.get('id') or '').replace(key,'[redacted]'))
+        store.settle_plan(owner,reservation['request_id'],cost,record)
+        if cost is None:raise ValueError('BUDGET_EXHAUSTED: provider cost missing; reservation retained until reconciliation.')
+        choice=data['choices'][0];raw=choice['message']['content']
+        if not isinstance(raw,str):raise ValueError('SCHEMA_INVALID: provider did not return text.')
+        return raw.replace(key,'[redacted]'),choice.get('finish_reason','')
+    except (httpx.HTTPError,KeyError,IndexError,TypeError,json.JSONDecodeError):
+        raise ValueError('Provider response unavailable or malformed. Cost may be unconfirmed; inspect usage before retrying.') from None

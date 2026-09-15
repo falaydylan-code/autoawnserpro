@@ -196,7 +196,7 @@ def test_a_planned_question_still_refuses_an_unplanned_answer(extension):
         const ref=p.elements.find(e=>e.key.endsWith('#optA')).ref;
         h.coverage.read({question:'Which account increases?',plan:'Cash',parts:[{id:'a',what:'the option',answer:'Cash',ref}]},p);}''',tab_id)
     out=execute(worker,tab_id,'optC')
-    assert not out['ok'] and 'not bound' in out['detail']
+    assert not out['ok'] and 'not one of this question' in out['detail']
 
 def test_worker_refuses_destructive_and_offsite_controls_before_the_page_does(extension):
     page,worker,tab_id,_,origin=extension

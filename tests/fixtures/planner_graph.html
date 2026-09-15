@@ -1,0 +1,7 @@
+﻿<!doctype html><meta charset="utf-8"><title>Transformed SVG plotting</title><style>svg{width:600px;height:480px;border:1px solid;touch-action:none}circle{fill:blue;cursor:grab}text{font:10px sans-serif}</style>
+<main data-question-id="graph"><h1>Place points A at (-2,-4), B at (0,2), C at (2,8)</h1>
+<svg id="graph" data-graph viewBox="0 0 300 240">
+<text data-axis="x" x="30" y="230">-5</text><text data-axis="x" x="150" y="230">0</text><text data-axis="x" x="270" y="230">5</text>
+<text data-axis="y" x="5" y="210">-10</text><text data-axis="y" x="5" y="110">0</text><text data-axis="y" x="5" y="10">10</text>
+<g transform="translate(10 5) scale(1.1)"><circle data-point-id="A" cx="40" cy="35" r="5" tabindex="0"/><circle data-point-id="B" cx="80" cy="35" r="5" tabindex="0"/><circle data-point-id="C" cx="120" cy="35" r="5" tabindex="0"/></g></svg>
+</main><script>let held=null;document.querySelectorAll('circle').forEach(c=>c.addEventListener('pointerdown',e=>{held=c;c.setPointerCapture(e.pointerId)}));graph.addEventListener('pointermove',e=>{if(!held)return;const p=new DOMPoint(e.clientX,e.clientY).matrixTransform(held.parentNode.getScreenCTM().inverse());held.setAttribute('cx',p.x);held.setAttribute('cy',p.y)});graph.addEventListener('pointerup',()=>held=null)</script>

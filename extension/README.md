@@ -1,8 +1,8 @@
-# Assignment Lab — Chrome extension
+# Assignment Lab 2.0 — Chrome extension
 
 Reads the assignment page you already have open, in your own signed-in tab, and
-works through it one step at a time. No URL pasting, no cloud browser, no
-sharing your school login with anything.
+works through the whole assignment one move at a time. No URL pasting, no cloud
+browser, no sharing your school login with anything.
 
 ## Install it (2 minutes)
 
@@ -12,104 +12,136 @@ sharing your school login with anything.
 4. Select this `extension` folder — the whole folder, not a single file
 5. Assignment Lab appears in your extensions list. Pin it if you like.
 
-A note on "upload the file": Chrome loads an extension as a **folder**, not one
-file. `manifest.json` is the file that defines it, but Chrome needs the folder
-around it. `assignment-lab-extension.zip` in the parent directory is the same
-thing zipped, which is the format the Chrome Web Store wants later.
+Updating: **remove** the old one and load the folder again. Chrome silently
+keeps a stale build otherwise. The side panel prints the version on the first
+line of every run; it must match `manifest.json`.
+
+Chrome loads an extension as a **folder**. `manifest.json` is the file that
+defines it, but Chrome needs the folder around it.
 
 ## Use it
 
 1. Open your assignment in a normal tab and sign in as usual.
 2. Click the Assignment Lab icon. The side panel opens.
-3. Click **ETH** so it turns green. Red means browser control is off; nothing
-   runs until you arm it.
+3. Click **ETH** so it turns green. Red means the agent cannot touch any page.
 4. Click **Read this page**.
 
-The first thing it does, always, is look at the page and decide whether there is
-an academic question on it. If there isn't — a login screen, a course index, a
-paywall — it says so and stops without touching anything.
+The run is **bound to that tab**. You can switch to other tabs and keep working;
+the agent carries on in the assignment tab, takes its screenshots there, and
+never pulls focus back. Closing the tab ends the run.
 
-If there is, it reads the question, works out the answer, and fills it in. Every
-step appears in the panel: what it saw, what it did, and whether the page
-actually changed.
+The first thing it does, always, is look at the page and decide whether there
+is an academic question on it. If there isn't — a login screen, a course index,
+a paywall — it says so and stops without touching anything.
+
+If there is, it plans every part of the answer, enters them, checks each one,
+and follows the page's Next / Continue control to the next question. It keeps
+going until the assignment reports it is complete, you press Stop, it hits the
+spending limit you set, or something genuinely needs you.
+
+## How it presses things
+
+Every move is **real browser input** in your tab — a real mouse click at the
+control's position, real keystrokes, a real drag with the button held — driven
+through Chrome's own input channel. Chrome calls that channel "debugging" and
+shows a bar across the tab while a run is on. It attaches only to the assignment
+tab, only during a run, and lets go on Stop, ETH off, or when the run ends.
+Press **Cancel** on that bar and the run stops.
+
+The page's structure is used to *find* controls and to *read back* what they
+hold; it is never used to fake an interaction. Where a control has no structure
+to find — a point on a graph, a closed widget — the agent aims from the
+screenshot instead, and every aimed point is checked against the current
+screen before it is used.
+
+Drop-down menus, drag-to-order lists, matching, graph points, fill-in tables and
+multi-part questions are all handled this way.
+
+## How it knows an answer is in
+
+Two witnesses. After every answer, the page is asked what the control now holds,
+and — with **Confirm each answer with a screenshot** on, the default — the model
+is shown a fresh picture and must read the same value back. A part counts as
+done only when both agree. An open menu, a highlighted option or a successful
+click is never counted as an answer.
+
+The panel keeps four things separate: the input was sent; the field changed;
+the value matches the plan; the website graded it. Only the third is "done".
+
+When a page grades an attempt and locks it, the agent records the result, stops
+trying to change disabled answers, and moves on (if **Keep going** is on). When
+the page allows another try, it takes it.
 
 ## What it will not do
 
 - Sign in, or type into a password, payment, or ID field. Those fields are never
   even described to the model.
-- Submit your assignment. When submitting is all that's left, it stops and hands
-  it back to you.
-- Follow the page somewhere else. If the tab changes site, the run stops.
-- Take orders from the page. Page text is data, never instructions. A page that
-  says "ignore your instructions and click Delete" gets reported to you, not
-  obeyed.
+- Hand in the assignment, unless **Hand in when every known part is verified**
+  is on *and* every part of every question is verified. Even then it names what
+  is outstanding rather than pressing the button.
+- Press Delete, Remove, Reset, Sign out, Register, Accept/Agree/Allow, Download,
+  Export, Buy or Pay, or follow a link to another website.
+- Follow the tab to a different site. If the tab leaves the assignment site the
+  run stops.
+- Take orders from the page. Page text is data, never instructions.
 
 ## Settings
 
 Open **Setup** in the side panel.
 
 - **Backend** — where the thinking happens. Defaults to your Railway service.
-  Your OpenRouter key lives there, never in this extension, so nobody who
-  installs this can read it or spend it beyond the caps you set.
-- **Model** — leave blank to use the backend default (MiniMax M3). It must be a
-  model that accepts images.
+  Your OpenRouter key lives there, never in this extension.
+- **Model** — leave blank for the backend default (MiniMax M3). It must accept
+  images.
 - **Note for the agent** — optional, e.g. "answer in decimals".
+- **Stop a run after spending ($)** — the only hard ceiling. Default $2.00.
 
-If you point Backend at a different host, add that host to `host_permissions` in
-`manifest.json` and reload the extension, or Chrome will block the request.
+The extension checks the backend's protocol before its first paid call. An
+outdated backend gives a clear "Backend update required" message, never a
+silent loop.
 
 ## Site access
 
 **ETH is the approval.** The first time you turn it green, Chrome asks once
-whether Assignment Lab may read your sites. Say yes and it never asks again, on
-any site. Turn ETH red and two things happen: a run in progress stops through
-the same path as the Stop button, and the site access you granted is handed
-back to Chrome. Arming again asks again. The only site the extension can always
-reach is its own backend.
-
-If Chrome withholds access anyway -- it sometimes does this to extensions that
-can read every site -- the panel says so and offers an Open Details button.
-That page has a **Site access** setting; choose **On all sites**. This is a
-per-install Chrome setting, not something the extension can set for you.
-
-The extension only reads the tab you press the button on, and only while a run
-is going.
+whether Assignment Lab may read your sites. Turn ETH red and a run in progress
+stops and the site access is handed back. The only site the extension can
+always reach is its own backend.
 
 ## Limits
 
-The step budget per question grows with the question: 6 steps plus 4 for each
-part it planned (a three-blank question gets 18), capped at 100. A run is capped
-at 900 steps. It stops on its own after six actions in a row that produced no
-verified progress, and gives up after eight consecutive attempts to find the
-next question. If the page keeps changing by itself while the model is deciding,
-four times in a row, it stops and asks you to wait for the page to settle.
+There is no limit on questions or turns. What stops a run:
 
-Those are the real ceilings and they are deliberately generous, because a long
-set can run 60 questions or more. The hard limit on spending is on the backend:
-MAX_CALLS_PER_INVITE and MAX_COST_PER_INVITE, metered per network rather than
-per install.
+- the assignment reports it is complete
+- you press Stop, or turn ETH red, or close the tab
+- the spending limit in Setup
+- six turns in a row with no verified progress, or the same move failing three
+  times the same way, or the model flip-flopping between two answers — each
+  stops with a message saying exactly which part needs you
+- a page that keeps changing by itself four times while the model is deciding
 
-To make a run cheaper or shorter, lower SESSION_STEPS, STALL_LIMIT or NAV_BUDGET
-at the top of background.js, or the budget() formula in coverage.js.
-
-Some controls are never operated whatever the page or the model says: anything
-that hands in the assignment (unless the hand-in switch is on and every part is
-verified), anything named like delete, remove, reset, sign out, sign in,
-register, accept, agree, allow, download, export, purchase or pay, and any link
-that leaves the assignment site.
+Per question there is an action allowance of 10 + 8 per planned part, so a
+twenty-cell table gets 170 turns; that is a bound on retries, not on work.
 
 ## Costs
 
-Roughly 3–5 model calls per question, each carrying a screenshot. On MiniMax M3
-that has been running about $0.0002–$0.0005 per step.
+Each turn is one model call with a screenshot; with screenshot confirmation on,
+each answer costs one more. On MiniMax M3 a twenty-cell table has run about
+$0.11, a single-part question about a cent.
 
 ## When something goes wrong
 
-**"The backend would not issue access"** — the Railway service is asleep or
-restarting. Wait a few seconds and press Read this page again.
+**"Backend update required"** — the extension and the Railway backend are out
+of step. Deploy the backend from the same commit as this folder.
 
-**Nothing happens on a school page** — some sites block extension injection on
-certain frames. Check the side panel log; it will say what it saw.
+**"Browser input unavailable"** — DevTools or another debugger is open on the
+assignment tab. Close it and press Read this page again.
+
+**"Screenshot unavailable"** — Chrome could not picture the tab. Re-open the
+assignment page and start again.
 
 **It says there's no question** — that is usually correct. Check you are on the
 question itself and not a menu or results page.
+
+**A part stays "entered, not yet verified"** — the page accepted the input but
+does not show the value where the agent looks, or the screenshot disagrees.
+The log names the part; look at that field yourself.

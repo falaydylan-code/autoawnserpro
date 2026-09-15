@@ -1,0 +1,16 @@
+<!doctype html><meta charset="utf-8"><title>Navigating assignment</title>
+<h1 id="title">Question 1</h1>
+<fieldset data-question-id="qA"><legend id="stem">Type the word GO</legend><input id="answer"></fieldset>
+<a id="next" href="?q=2">Next Question</a>
+<script>
+// Each "Next" is a real full-document navigation to ?q=N (same origin). The
+// content script is destroyed and must be re-injected for the run to continue.
+// No grading here: this fixture isolates the navigation path.
+const q=Number(new URLSearchParams(location.search).get('q'))||1;
+if(q>3){document.body.innerHTML='<h1>Assignment complete</h1><p>You have completed this assignment.</p>';}
+else{
+  document.getElementById('title').textContent='Question '+q;
+  document.querySelector('fieldset').setAttribute('data-question-id','q'+q);
+  document.getElementById('next').href='?q='+(q+1);
+}
+</script>
