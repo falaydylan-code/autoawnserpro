@@ -102,6 +102,31 @@ def test_ambiguous_duplicate_frames_do_not_abort_a_readable_question(extension):
     assert page.locator('#amount').input_value() == '42'
 
 
+def test_model_authored_page_script_extraction_feeds_the_plan(extension):
+    """The 'run a page script' reach, like Claude-in-Chrome: the plan first asks
+    to run a read-only JS extraction; the harness runs it in the page through the
+    debugger, feeds the JSON result back as evidence, and the model then plans and
+    finishes. Proves the model can reach into the DOM to measure/enumerate."""
+    page, w, tid = navigate(extension, 'custom_dropdowns.html')
+    result = w.evaluate('''async id=>{const h=__assignmentHarness;await AssignmentVisual.attach(id);
+      const bridge=h.plannerBridge();bridge.config=async()=>({advance:false,auto_submit:false,spend_limit:2,model:'test'});
+      globalThis.calls=[];globalThis.evidenceSeen=null;let planned=false;
+      bridge.request=async(phase,body)=>{globalThis.calls.push(phase);
+        if(phase==='verify')return {cost:.001,response:{kind:'verified'}};
+        if(!planned){planned=true;return {cost:.001,response:{kind:'request_inspection',
+          question_key:body.observation.question_key,observation_id:body.observation.observation_id,
+          inspection:{question:'How many answer cells are there?',script:'return document.querySelectorAll("td.responseCell").length'}}};}
+        globalThis.evidenceSeen=body.observation.evidence;
+        return {cost:.001,response:{kind:'plan',question_key:body.observation.question_key,observation_id:body.observation.observation_id,
+          tasks:body.observation.slots.map((s,i)=>({task_id:'t'+i,slot_key:s.slot_key,operation:'set_selection',
+            desired:{label:s.label.includes('Statement')?'Balance Sheet':'Asset'},depends_on:[]}))}};};
+      globalThis.engine=new AssignmentPlanner.Engine(bridge,id,await bridge.config());return engine.run();}''', tid)
+    assert result['status'] == 'finished', result['events'][-3:]
+    ev = w.evaluate('evidenceSeen')
+    assert ev and any(e.get('operation') == 'script' and e.get('result') == 20 for e in ev), ev
+    assert page.locator('td[data-value]').count() == 20
+
+
 def test_second_witness_screenshot_rejects_then_reenters(extension):
     """The confirming screenshot has teeth: when it reports an answer isn't
     visible, the harness drops that answer and re-enters it before finishing,

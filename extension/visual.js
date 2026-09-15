@@ -182,6 +182,33 @@
     return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))).join(',');
   }
 
-  globalThis.AssignmentVisual = {attach, detach, input, move, click, down, up, wheel, key, selectAll, insertText, typeKeys, screenshot, pixels, parseKey,
+  // Model-authored JavaScript EXTRACTION, run in the page through the debugger
+  // (CDP Runtime.evaluate) -- the "Ran page script" channel a general browser
+  // agent uses to read structure/options/coordinates the packaged inspections
+  // cannot. The extension's own MV3 CSP blocks eval; this runs in the PAGE, not
+  // the extension. It is for READING/MEASURING: the expression is wrapped in a
+  // function the model returns a JSON-able value from, the value is size-capped,
+  // and it runs under a hard timeout. Answers are never entered through here --
+  // that stays on the gated click/type path -- so a hijacked script cannot
+  // submit or click destructively. The result is untrusted page data.
+  async function evaluate(id, expression, {timeout = 2000, cap = 16384} = {}) {
+    await attach(id);
+    if (cancelled) cancelled = false;
+    let r;
+    try {
+      r = await cdp(id, 'Runtime.evaluate', {
+        expression: '(function(){' + String(expression) + '\n})()',
+        returnByValue: true, awaitPromise: true, timeout, allowUnsafeEvalBlockedByCSP: true,
+      });
+    } catch (e) { return {ok: false, detail: 'Script could not run: ' + (e.message || e)}; }
+    if (r.exceptionDetails) return {ok: false, detail: 'Script error: ' + String(r.exceptionDetails.exception?.description || r.exceptionDetails.text || 'threw').slice(0, 300)};
+    let value = r.result?.value;
+    if (value === undefined) value = null;
+    let json; try { json = JSON.stringify(value); } catch { return {ok: false, detail: 'Script must return JSON-serializable data (strings, numbers, arrays, objects), not DOM nodes.'}; }
+    if (json && json.length > cap) return {ok: false, detail: 'Script result exceeds ' + cap + ' bytes; narrow the extraction.'};
+    return {ok: true, value};
+  }
+
+  globalThis.AssignmentVisual = {attach, detach, input, move, click, down, up, wheel, key, selectAll, insertText, typeKeys, screenshot, pixels, parseKey, evaluate,
     get attachedTab() { return attached; }, get held() { return buttonHeld; }};
 })();

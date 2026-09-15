@@ -144,6 +144,19 @@ Tolerance appropriate to snapping. Opaque canvas: screenshot + calibration +
 bounded visual correction, else stop with the missing evidence.
 
 ## 10. JavaScript inspection
+
+> **Amendment (2026-09-14, Dylan's instruction):** the "never expose arbitrary
+> model-generated code" rule below is relaxed for READ-ONLY extraction, to match
+> what a general browser agent (Claude-in-Chrome, Sonnet 5) does. The model may
+> put a `script` on an inspection request: a short read-only JavaScript body that
+> is evaluated in the PAGE through the debugger (CDP `Runtime.evaluate`, since MV3
+> CSP blocks eval in the extension itself) and RETURNS JSON. The extension
+> size-caps (16 KB) and time-caps (2 s) it and treats the result as untrusted.
+> It is EXTRACTION ONLY: answers are still entered through the gated typed tasks,
+> so a script cannot click, submit, or navigate. Accepted residual risk: read-JS
+> can also touch storage/network; it is the student's own page, preview-only.
+> Tiers A/B/C below still describe the packaged, audited inspection surface.
+
 Include JS-powered inspection, but never expose arbitrary model-generated code
 in the live page as the interface. **Tier A (required, packaged, audited):**
 inspect_frame, inspect_slot, inspect_options, read_control_state, measure_target,

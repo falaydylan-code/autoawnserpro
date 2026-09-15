@@ -69,6 +69,14 @@ def test_plan_endpoint_meters_once_and_preserves_key(monkeypatch,tmp_path):
   assert secret not in r.text+again.text
   assert secret.encode() not in (tmp_path/'agent.db').read_bytes()
 
+def test_inspection_accepts_a_read_script_and_rejects_an_empty_request():
+ ok=planner.parse_plan(json.dumps({'kind':'request_inspection','question_key':'q','observation_id':'o','inspection':{'question':'?','script':'return document.title'}}))
+ assert ok.kind=='request_inspection' and ok.inspection.script=='return document.title'
+ packaged=planner.parse_plan(json.dumps({'kind':'request_inspection','question_key':'q','observation_id':'o','inspection':{'question':'?','slot_key':'q/a','requests':['inspect_options']}}))
+ assert packaged.inspection.requests==['inspect_options']
+ with pytest.raises(ValueError):  # neither requests nor script -> nothing to inspect
+  planner.parse_plan(json.dumps({'kind':'request_inspection','question_key':'q','observation_id':'o','inspection':{'question':'?'}}))
+
 def test_verify_contract_confirms_or_flags_known_slots_only():
  import asyncio,pytest
  o=obs('selection');o['screenshot']='data:image/png;base64,AAAA'

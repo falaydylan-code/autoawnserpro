@@ -247,13 +247,26 @@
     }
     async inspectRequest(response,obs){
       const r=this.current.recovery;if(++r.inspections>LIMITS.inspections)throw new Fault('BUDGET_EXHAUSTED','Missing-information rounds exhausted.');await this.persist();
-      const req=response.inspection,slot=obs.slots.find(s=>s.slot_key===req?.slot_key);
-      if(!slot)throw new Fault('TARGET_MISSING','Inspection needs a specific offered slot.');
-      const evidence=[];
-      for(const op of req.requests){if(!['inspect_frame','inspect_slot','inspect_options','read_control_state','measure_target','inspect_svg_geometry','inspect_scroll_container'].includes(op))throw new Fault('GUARD_REJECTED','Unknown inspection.');
-        if(op==='inspect_options'&&slot.kind==='selection'&&!slot.native&&!slot.frame.menus.some(m=>m.owner===slot.local_slot)){await this.click(slot.frame,slot.representations?.[0]||slot.target);await sleep(150);}
-        const fresh=await this.observe(),s=this.slot(fresh,slot.slot_key);evidence.push({slot_key:s.slot_key,operation:op,result:op==='inspect_options'?s.frame.menus.filter(m=>m.owner===s.local_slot).map(m=>({label:m.label,disabled:m.disabled})):await this.inspect(s.frame,s.target,op)});
+      const req=response.inspection,evidence=[];
+      // Model-authored read-only page script (the "Ran page script" reach). Run
+      // it in the page through the debugger, size- and time-bounded; the result
+      // is untrusted evidence for the next plan, never an action. If it mutated
+      // the answer surface, the question/document guard on the re-observe below
+      // catches it.
+      if(req.script){
+        await this.guard();await this.event('INSPECT','Running the read-only page script the model requested',{script:req.script.slice(0,200)});
+        const out=await AssignmentVisual.evaluate(this.tabId,req.script);
+        evidence.push(out.ok?{operation:'script',script:req.script.slice(0,400),result:out.value}:{operation:'script',script:req.script.slice(0,400),error:out.detail});
       }
+      if(req.requests?.length){
+        const slot=obs.slots.find(s=>s.slot_key===req.slot_key);
+        if(!slot)throw new Fault('TARGET_MISSING','A packaged inspection needs a specific offered slot.');
+        for(const op of req.requests){if(!['inspect_frame','inspect_slot','inspect_options','read_control_state','measure_target','inspect_svg_geometry','inspect_scroll_container'].includes(op))throw new Fault('GUARD_REJECTED','Unknown inspection.');
+          if(op==='inspect_options'&&slot.kind==='selection'&&!slot.native&&!slot.frame.menus.some(m=>m.owner===slot.local_slot)){await this.click(slot.frame,slot.representations?.[0]||slot.target);await sleep(150);}
+          const fresh=await this.observe(),s=this.slot(fresh,slot.slot_key);evidence.push({slot_key:s.slot_key,operation:op,result:op==='inspect_options'?s.frame.menus.filter(m=>m.owner===s.local_slot).map(m=>({label:m.label,disabled:m.disabled})):await this.inspect(s.frame,s.target,op)});
+        }
+      }
+      if(!evidence.length)throw new Fault('TARGET_MISSING','The inspection produced no evidence.');
       const serialized=JSON.stringify(evidence);if(this.current.inspectionSignature===serialized)throw new Fault('REPEATED_STATE','Inspection returned no new evidence.');this.current.inspectionSignature=serialized;this.current.evidence=evidence;r.progress();return this.observe();
     }
     async runQuestion(obs){

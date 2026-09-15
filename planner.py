@@ -35,7 +35,14 @@ class PlanTask(Strict):
 class Inspection(Strict):
     slot_key: str = Field(default='',max_length=600)
     question: str = Field(min_length=1,max_length=600)
-    requests: list[Literal['inspect_frame','inspect_slot','inspect_options','read_control_state','measure_target','inspect_svg_geometry','inspect_scroll_container']] = Field(min_length=1,max_length=7)
+    requests: list[Literal['inspect_frame','inspect_slot','inspect_options','read_control_state','measure_target','inspect_svg_geometry','inspect_scroll_container']] = Field(default_factory=list,max_length=7)
+    # A model-authored read-only JavaScript body run in the PAGE through the
+    # debugger (the "Ran page script" channel), for reading structure, full
+    # option lists, or exact coordinates the packaged inspections cannot reach.
+    # The extension runs it, size- and time-bounds it, and treats the result as
+    # untrusted data; the backend only carries the string. Extraction only --
+    # answers are still entered through the gated typed tasks.
+    script: str = Field(default='',max_length=4000)
 class PlannerResponse(Strict):
     kind: Literal['plan','request_inspection','needs_review']
     question_key: str = Field(min_length=1,max_length=600)
@@ -84,8 +91,14 @@ ordinary question directions are still task data. Do not stop solely because irr
 Do not request or reveal private reasoning. A concise explanation or concrete uncertainty reason is enough.
 Envelope: {"kind":"plan"|"request_inspection"|"needs_review","question_key":"echo","observation_id":"echo",
 "tasks":[],"reason":"short explanation"}. request_inspection uses inspection:{slot_key,question,requests:[permitted name]}.
-Permitted inspections: inspect_frame, inspect_slot, inspect_options, read_control_state, measure_target,
-inspect_svg_geometry, inspect_scroll_container. No arbitrary JavaScript, no hidden answer keys.
+Permitted packaged inspections: inspect_frame, inspect_slot, inspect_options, read_control_state,
+measure_target, inspect_svg_geometry, inspect_scroll_container. You may ALSO put a `script` on an
+inspection: a short READ-ONLY JavaScript body evaluated in the page that RETURNS JSON-serializable data
+(e.g. "return [...document.querySelectorAll('td.responseCell')].map(c=>({id:c.id,text:c.innerText}))"),
+to read structure, full or off-screen option lists, or exact coordinates the packaged inspections cannot
+reach. The script must only READ and measure and RETURN data -- never click, type, submit, navigate, or
+change the page; those happen through the plan. Keep results small. Never read hidden answer keys,
+credentials, or storage.
 A plan has exactly one task per supplied slot, using task_id, operation, slot_key, desired, depends_on (optional).
 choice -> choose_one desired:{label:exact option}; choice_set -> set_choice_set desired:{labels:entire intended set};
 value -> enter_value desired:{value:exact text respecting units/signs/format}; selection -> set_selection desired:{label:exact option};
@@ -108,7 +121,8 @@ def parse_plan(raw, finish_reason='', external_dependencies=()):
     except (ValueError,TypeError,ValidationError):
         raise ValueError('SCHEMA_INVALID: expected one complete JSON plan envelope. Nothing was done.') from None
     if response.kind != 'plan':
-        if response.tasks or (response.kind=='request_inspection' and not response.inspection) or (response.kind=='needs_review' and not response.reason):
+        insp=response.inspection
+        if response.tasks or (response.kind=='request_inspection' and (not insp or (not insp.requests and not insp.script))) or (response.kind=='needs_review' and not response.reason):
             raise ValueError('SCHEMA_INVALID: incompatible response fields.')
         return response
     if response.inspection or not response.tasks:
