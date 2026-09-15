@@ -18,7 +18,16 @@
       points:r.points.map(p=>({id:p.id,x:(p.x-x.origin)/x.scale,y:(p.y-y.origin)/y.scale,viewport:{x:box.x+p.x*box.w,y:box.y+p.y*box.h}}))};
   }
 
-  const LIMITS={ui:5000,navigation:15000,local:2,repairs:2,inspections:2,noProgress:90000,question:300000,request:60000};
+  const LIMITS={ui:5000,navigation:15000,local:2,repairs:2,inspections:2,verify:2,noProgress:90000,question:300000,request:60000};
+  // The value a task intends, rendered for the second-witness screenshot check.
+  // place_points has no textual value -- the graph is confirmed by its own
+  // calibrated readback, so it is excluded from the visual answer list.
+  const plannedValue=task=>{const d=task.desired||{};switch(task.operation){
+    case 'choose_one':case 'set_selection':return d.label||'';
+    case 'enter_value':return d.value||'';
+    case 'set_choice_set':return (d.labels||[]).join(', ');
+    case 'set_order':return (d.sequence||[]).join(' > ');
+    default:return '';}};
   class Fault extends Error{constructor(code,detail,actual=null){super(code+': '+detail);this.code=code;this.actual=actual}}
   const requireOK=r=>{if(!r?.ok)throw new Fault(r?.code||'INPUT_NO_EFFECT',r?.detail||'Browser operation failed.');return r};
   class Recovery {
@@ -210,7 +219,11 @@
     }
     publicObservation(obs){return {question_key:obs.question_key,document_id:obs.document_id,observation_id:obs.observation_id,question:obs.question,slots:obs.slots.map(s=>{s=this.current?this.slot(obs,s.slot_key):s;return ({slot_key:s.slot_key,kind:s.kind,label:s.label,options:s.options,current:s.current,...(s.geometry?{geometry:s.geometry}:{})})}),completeness:obs.completeness,host:obs.host,task_note:this.config.note||'',evidence:this.current?.evidence||[]}}
     async paid(obs,task=null,error=null){await this.guard();await this.event(task?'REPAIR':'PLAN',task?'Repairing the failed task':'Planning answers for this question');const generation=this.generation;const body={run_id:this.id,request_id:crypto.randomUUID(),spend_limit:this.config.spend_limit,model:this.config.model,observation:this.publicObservation(obs)};
-      if(obs.visual){const shot=await AssignmentVisual.screenshot(this.tabId);body.observation.screenshot=shot.dataUrl;}
+      // See what a human sees: the planner always gets DOM + a settled screenshot
+      // together, not the scraped controls alone. Redesign per Dylan -- the model
+      // plans from the picture (rendered math, diagrams, layout the DOM omits),
+      // and the same applies to a repair so it sees the page it is correcting.
+      const shot=await AssignmentVisual.screenshot(this.tabId);body.observation.screenshot=shot.dataUrl;
       if(task)Object.assign(body,{task,failure:{code:error.code,detail:error.message,actual:error.actual},completed_slots:Object.keys(this.current.completed),history:this.current.recovery.history});
       this.ledger.pending_request=body.request_id;await this.persist();const start=Date.now();let data;
       try{data=await this.b.request(task?'repair':'plan',body,this.abort.signal)}catch(e){this.ledger.status='needs_review';throw e}
@@ -268,7 +281,42 @@
         }
         if(count%8===0){await this.event('OBSERVE','Reconciling completed batch');await this.reconcile()}
       }
-      await this.reconcile();this.current.finished=true;await this.event('FINISH','All observed answers entered and verified. Save and grade evidence are reported separately.');
+      await this.reconcile();await this.visualGate();this.current.finished=true;await this.event('FINISH','All observed answers entered and verified by DOM and a confirming screenshot. Save and grade evidence are reported separately.');
+    }
+    // Second witness. After every answer is confirmed by DOM readback, a
+    // screenshot is shown to the model to confirm the entered values are actually
+    // visible. A mismatch drops those answers and re-enters them, bounded by
+    // LIMITS.verify; graph points are excluded (their own calibrated readback is
+    // the witness). No confirming screenshot for a question with no textual
+    // answers to see.
+    async confirmVisually(obs){
+      const expected=this.current.plan.tasks.filter(t=>this.current.completed[t.slot_key]&&plannedValue(t)!=='')
+        .map(t=>{const s=this.slot(obs,t.slot_key);return {slot_key:t.slot_key,label:s.label,value:plannedValue(t)}});
+      if(!expected.length)return {kind:'verified'};
+      const shot=await AssignmentVisual.screenshot(this.tabId),generation=this.generation;
+      const observation=this.publicObservation(obs);observation.screenshot=shot.dataUrl;
+      const body={run_id:this.id,request_id:crypto.randomUUID(),spend_limit:this.config.spend_limit,model:this.config.model,observation,expected};
+      this.ledger.pending_request=body.request_id;await this.persist();
+      await this.event('VERIFY','Confirming answers from a screenshot (second witness)',{slot_count:expected.length});
+      const data=await this.b.request('verify',body,this.abort.signal);
+      if(Number.isFinite(data.cost)){this.ledger.cost+=data.cost;this.ledger.pending_request=null}await this.persist();await this.guard();
+      if(generation!==this.generation)throw new Fault('CANCELLED','Discarded late verification.');
+      if(!data.response)throw new Fault('VALUE_MISMATCH',data.detail||'Visual verification returned nothing.');
+      await this.event('VERIFY','Screenshot verification: '+data.response.kind,{model_calls:1,cost:data.cost,input_tokens:data.input_tokens,output_tokens:data.output_tokens,mismatches:data.response.mismatches});
+      return data.response;
+    }
+    async visualGate(){
+      for(let round=0;round<=LIMITS.verify;round++){
+        const obs=await this.observe();this.same(obs);
+        const result=await this.confirmVisually(obs);
+        if(result.kind==='verified'){this.current.recovery.progress();return}
+        if(round>=LIMITS.verify)throw new Fault('VALUE_MISMATCH','A screenshot could not confirm these answers after re-entry: '+result.mismatches.join(', ')+'. '+(result.reason||''));
+        for(const k of result.mismatches){
+          const task=this.current.plan.tasks.find(t=>t.slot_key===k);if(!task)continue;
+          delete this.current.completed[k];await this.event('LOCAL_RECOVERY','Screenshot disagreed; re-entering answer',{slot_key:k,failure_code:'VALUE_MISMATCH',detail:result.reason});
+          const r=await this.execute(task);this.current.completed[k]={entry_verified:true,action_executed:!r.skipped,actual:r.s.current,save_state:r.obs.save_state,grade_state:r.obs.grade_state,document_id:r.obs.document_id};
+        }
+      }
     }
     async reconcile(){
       let obs=await this.observe();this.same(obs);

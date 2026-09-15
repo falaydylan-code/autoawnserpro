@@ -5,13 +5,15 @@ from test_ordering_visual import navigate
 
 BOOT='''async id=>{const h=__assignmentHarness;await AssignmentVisual.attach(id);
  const bridge=h.plannerBridge();bridge.config=async()=>({advance:false,auto_submit:false,spend_limit:2,model:'test'});
- bridge.request=async(phase,body)=>{globalThis.calls.push({phase,body});return {cost:.001,response:{kind:'plan',question_key:body.observation.question_key,observation_id:body.observation.observation_id,tasks:body.observation.slots.map((s,i)=>{
+ bridge.request=async(phase,body)=>{globalThis.calls.push({phase,body});
+ if(phase==='verify')return {cost:.001,response:{kind:'verified'}};
+ return {cost:.001,response:{kind:'plan',question_key:body.observation.question_key,observation_id:body.observation.observation_id,tasks:body.observation.slots.map((s,i)=>{
  const ops={choice:'choose_one',choice_set:'set_choice_set',value:'enter_value',selection:'set_selection',ordering:'set_order',position:'place_points'};
  let desired=s.kind==='choice'?{label:'B'}:s.kind==='choice_set'?{labels:['A','C']}:s.kind==='value'?{value:'42'}:s.kind==='ordering'?{sequence:['Revenues','Expenses','Net Income']}:{label:s.label.includes('Statement')?'Balance Sheet':'Asset'};
  return {task_id:'t'+i,slot_key:s.slot_key,operation:ops[s.kind],desired,depends_on:[]};})}}};
  globalThis.calls=[];globalThis.engine=new AssignmentPlanner.Engine(bridge,id,await bridge.config());return engine.observe();}'''
 
-def test_one_plan_choices_text_readback_without_vision(extension):
+def test_one_plan_choices_text_readback_single_call_with_screenshot(extension):
  page,w,tid=navigate(extension,'planner_standard.html');obs=w.evaluate(BOOT,tid)
  assert len(obs['slots'])==3
  result=w.evaluate('()=>engine.run()')
@@ -22,7 +24,12 @@ def test_one_plan_choices_text_readback_without_vision(extension):
  assert page.locator('input[value=C][type=checkbox]').is_checked()
  assert page.locator('#amount').input_value()=='42'
  assert page.evaluate('submitted')==0
- calls=w.evaluate('calls');assert len(calls)==1 and not calls[0]['body']['observation'].get('screenshot')
+ # Still ONE planning call, and it now carries a screenshot: the model plans
+ # from what a human sees (DOM + picture). A second-witness verify call confirms
+ # the answers from a screenshot before finishing.
+ calls=w.evaluate('calls');plan=[c for c in calls if c['phase']=='plan']
+ assert len(plan)==1 and plan[0]['body']['observation'].get('screenshot')
+ assert any(c['phase']=='verify' for c in calls)
  q=next(iter(result['questions'].values()));assert len(q['completed'])==3
  assert all(p['entry_verified'] for p in q['completed'].values())
 
@@ -33,14 +40,14 @@ def test_twenty_dropdown_slots_one_plan(extension):
  assert result['status']=='finished',result['events'][-1]['detail']
  assert page.locator('td[data-value=Asset]').count()==10
  assert page.locator('td[data-value="Balance Sheet"]').count()==10
- assert w.evaluate('calls.length')==1
+ assert [c['phase'] for c in w.evaluate('calls')].count('plan')==1
  q=next(iter(result['questions'].values()));assert len(q['completed'])==20
 
 def test_resume_reconciles_without_replaying_completed_input(extension):
  page,w,tid=navigate(extension,'planner_standard.html');w.evaluate(BOOT,tid);first=w.evaluate('()=>engine.run()');entries=page.evaluate('entries')
  result=w.evaluate('''async()=>{const old=engine;engine=new AssignmentPlanner.Engine(old.b,old.tabId,old.config,old.ledger);return engine.run()}''')
  assert result['status']=='finished',result['events'][-3:]
- assert page.evaluate('entries')==entries and w.evaluate('calls.length')==1
+ assert page.evaluate('entries')==entries and [c['phase'] for c in w.evaluate('calls')].count('plan')==1
 
 def test_wrong_menu_duplicate_label_stops_in_budget(extension):
  page,w,tid=navigate(extension,'custom_dropdowns.html')
@@ -155,7 +162,7 @@ def test_reused_menu_nodes_delayed_options_below_fold(extension):
  document.querySelector('table').style.marginTop='900px';}''')
  w.evaluate(BOOT,tid);result=w.evaluate('()=>engine.run()')
  assert result['status']=='finished',result['events'][-1]['detail']
- assert page.locator('td[data-value]').count()==20 and w.evaluate('calls.length')==1
+ assert page.locator('td[data-value]').count()==20 and [c['phase'] for c in w.evaluate('calls')].count('plan')==1
 
 def test_overlay_guard_records_failure_without_click(extension):
  page,w,tid=navigate(extension,'planner_standard.html')

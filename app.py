@@ -433,13 +433,13 @@ async def capabilities(protocol: int = 3):
     # falls back to the protocol-3 default rather than 422-ing the negotiation,
     # so the planner's `?protocol=4` request actually returns protocol 4.
     protocol = protocol if protocol in (3, 4) else 3
-    return {'protocol': protocol, 'extension': '0.9.0', 'supported_protocols': [3,4],
+    return {'protocol': protocol, 'extension': '0.9.2', 'supported_protocols': [3,4],
             'planner_release': 'preview',
             'features': ['parts', 'ordering', 'visual_input', 'visual_verification', 'browser_input', 'page_states', 'no_step_ceiling',
                          'task_plans', 'scoped_observations', 'stable_slots', 'typed_verification', 'bounded_repair', 'geometry_inspection']}
 
 
-async def planner_endpoint(body, request, who, repair=False, visual=False):
+async def planner_endpoint(body, request, who, repair=False, visual=False, verify=False):
     import math
     import json
     throttle(request, 'planner', per_ip=1500, per_global=9000, window=600,
@@ -462,7 +462,7 @@ async def planner_endpoint(body, request, who, repair=False, visual=False):
         if observation['screenshot']:
             ntokens=int(entry.get('context_length') or 0)
             if ntokens<=0:raise ValueError()
-        amount=ntokens*inp+(2000 if visual else planner.call_limits(observation,repair))*out+fee
+        amount=ntokens*inp+(2000 if visual or verify else planner.call_limits(observation,repair))*out+fee
         if any(float(v or 0)>0 for k,v in pricing.items() if k not in ('prompt','completion','request','input_cache_read','input_cache_write','internal_reasoning')):
             raise ValueError()
     except (ValueError,KeyError,TypeError):
@@ -470,9 +470,11 @@ async def planner_endpoint(body, request, who, repair=False, visual=False):
     record={};owner_key=budget_key(who,request)
     async def transport(messages,max_tokens):
         return await agent.planner_complete(owner_key,messages,selected,record,max_tokens,
-            dict(run_id=body.run_id,request_id=body.request_id,question=observation['question_key'],phase='visual' if visual else 'repair' if repair else 'plan',cap=body.spend_limit,amount=amount),price_limit={'prompt':inp*1e6,'completion':out*1e6,'request':fee,'image':0,'audio':0})
+            dict(run_id=body.run_id,request_id=body.request_id,question=observation['question_key'],phase='verify' if verify else 'visual' if visual else 'repair' if repair else 'plan',cap=body.spend_limit,amount=amount),price_limit={'prompt':inp*1e6,'completion':out*1e6,'request':fee,'image':0,'audio':0})
     try:
-        if visual:
+        if verify:
+            answer=await planner.request_verify(body,transport)
+        elif visual:
             answer=await planner.request_visual(body,transport)
         else:
             answer=await planner.request(owner_key,observation,selected,record,transport,
@@ -480,7 +482,7 @@ async def planner_endpoint(body, request, who, repair=False, visual=False):
             context={'task':body.task.model_dump(),'failure':body.failure,'completed_slots':body.completed_slots,'history':body.history} if repair else None)
     except ValueError as exc:
         return JSONResponse(status_code=400,content={'detail':str(exc),**record})
-    return {'response':answer.model_dump(),'phase':'visual' if visual else 'repair' if repair else 'plan','reservation':amount,**record}
+    return {'response':answer.model_dump(),'phase':'verify' if verify else 'visual' if visual else 'repair' if repair else 'plan','reservation':amount,**record}
 
 
 @app.get('/api/agent/runs/{run_id}')
@@ -493,6 +495,11 @@ async def planner_run_status(run_id: str, request: Request, who=Depends(owner)):
 @app.post('/api/agent/visual')
 async def agent_visual(body: planner.VisualRequest, request: Request, who=Depends(owner)):
     return await planner_endpoint(body,request,who,visual=True)
+
+
+@app.post('/api/agent/verify')
+async def agent_verify(body: planner.VerifyRequest, request: Request, who=Depends(owner)):
+    return await planner_endpoint(body,request,who,verify=True)
 
 
 @app.post('/api/agent/plan')

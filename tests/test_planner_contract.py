@@ -69,6 +69,17 @@ def test_plan_endpoint_meters_once_and_preserves_key(monkeypatch,tmp_path):
   assert secret not in r.text+again.text
   assert secret.encode() not in (tmp_path/'agent.db').read_bytes()
 
+def test_verify_contract_confirms_or_flags_known_slots_only():
+ import asyncio,pytest
+ o=obs('selection');o['screenshot']='data:image/png;base64,AAAA'
+ body=planner.VerifyRequest(run_id='r',request_id='c',model='m',observation=o,expected=[{'slot_key':'q/a','label':'Answer','value':'A'}])
+ async def good(m,mt):return ('{"kind":"verified"}','stop')
+ async def flag(m,mt):return ('{"kind":"mismatch","mismatches":["q/a"],"reason":"blank"}','stop')
+ async def bogus(m,mt):return ('{"kind":"mismatch","mismatches":["q/not-a-slot"],"reason":"x"}','stop')
+ assert asyncio.run(planner.request_verify(body,good)).kind=='verified'
+ assert asyncio.run(planner.request_verify(body,flag)).mismatches==['q/a']
+ with pytest.raises(ValueError):asyncio.run(planner.request_verify(body,bogus))   # can't flag a slot it wasn't given
+
 def test_capabilities_negotiates_protocol_without_422():
  # The planner startup fetches /api/capabilities?protocol=4; the query int must
  # coerce and echo 4 (not 422), while the default stays 3 for loaded 0.8 builds.

@@ -19,7 +19,9 @@ def boot(worker, tid, label):
     return worker.evaluate('''async ({id,label})=>{const h=__assignmentHarness;await AssignmentVisual.attach(id);
       const bridge=h.plannerBridge();bridge.config=async()=>({advance:false,auto_submit:false,spend_limit:2,model:'test'});
       globalThis.calls=[];
-      bridge.request=async(phase,body)=>{globalThis.calls.push(phase);return {cost:.001,response:{kind:'plan',
+      bridge.request=async(phase,body)=>{globalThis.calls.push(phase);
+        if(phase==='verify')return {cost:.001,response:{kind:'verified'}};
+        return {cost:.001,response:{kind:'plan',
         question_key:body.observation.question_key,observation_id:body.observation.observation_id,
         tasks:body.observation.slots.map((s,i)=>({task_id:'t'+i,slot_key:s.slot_key,operation:'set_selection',desired:{label},depends_on:[]}))}};};
       globalThis.engine=new AssignmentPlanner.Engine(bridge,id,await bridge.config());await engine.observe();return true;}''',
@@ -98,6 +100,26 @@ def test_ambiguous_duplicate_frames_do_not_abort_a_readable_question(extension):
     result = w.evaluate('()=>engine.run()')
     assert result['status'] == 'finished', result['events'][-3:]
     assert page.locator('#amount').input_value() == '42'
+
+
+def test_second_witness_screenshot_rejects_then_reenters(extension):
+    """The confirming screenshot has teeth: when it reports an answer isn't
+    visible, the harness drops that answer and re-enters it before finishing,
+    instead of trusting the DOM readback alone."""
+    from test_planner_executor import BOOT
+    page, w, tid = navigate(extension, 'planner_standard.html')
+    w.evaluate(BOOT, tid)
+    result = w.evaluate('''async()=>{const plan=engine.b.request;globalThis.vseen=0;
+      engine.b.request=async(phase,body)=>{
+        if(phase==='verify'){vseen++;if(vseen===1){const slot=body.expected.find(e=>e.value==='42').slot_key;
+          return {cost:.001,response:{kind:'mismatch',mismatches:[slot],reason:'text box looked blank'}};}
+          return {cost:.001,response:{kind:'verified'}};}
+        return plan(phase,body);};
+      return engine.run();}''')
+    assert result['status'] == 'finished', result['events'][-3:]
+    assert page.locator('#amount').input_value() == '42'
+    assert w.evaluate('vseen') >= 2, 'the screenshot rejection did not trigger a re-check'
+    assert any(e.get('failure_code') == 'VALUE_MISMATCH' and e['phase'] == 'LOCAL_RECOVERY' for e in result['events'])
 
 
 def test_legacy_gate_blocks_unplanned_graph_before_submit(extension):
