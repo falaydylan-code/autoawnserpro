@@ -1,5 +1,37 @@
 # Handoff log
 
+## 2026-09-14 — claude — model-authored page-script extraction (0.9.3)
+
+**Did:** Added the "Ran page script" reach a general browser agent uses, on
+Dylan's explicit instruction (he reaffirmed after I flagged the no-eval rule).
+MV3 CSP blocks eval in the extension, so it runs in the PAGE through the debugger
+we already attach: `AssignmentVisual.evaluate` (CDP Runtime.evaluate) runs a
+model-authored JS body, returns JSON by value, 2 s timeout, 16 KB cap, errors and
+non-serializable results refused. `planner.Inspection` gained an optional
+read-only `script`; `inspectRequest` runs it and feeds the JSON back as untrusted
+evidence for the next plan, re-observing afterward (the question/document guard
+catches a script that mutated the answer surface). Prompt offers it and forbids
+click/type/submit/navigate. EXTRACTION ONLY — answers still go through the gated
+typed tasks, so a hijacked script can't submit or click destructively.
+
+**Verified:** 242 tests pass (one legacy browser test load-flakes in the full
+run, green alone). New: `AssignmentVisual.evaluate` runs/bounds/errors correctly
+against a fixture; a plan that first requests a page script gets the JSON result
+as evidence and finishes; the `script` schema is accepted, an empty inspection
+rejected. Backend deployed to Railway at 0.9.3 (`?protocol=4`→4, ext 0.9.3).
+Pushed to origin `codex/planner-completion`; PR #7.
+
+**Left undone:** Live McGraw validation still needs Dylan's login; planner stays
+preview/default-off. The residual JS risk (read-JS can touch storage/network) is
+unsandboxable and accepted for the student's own page — documented in
+SOP_PLANNER.md §10 amendment.
+
+**Watch out:** the script channel is `Runtime.evaluate` in the page's MAIN world;
+it can reach same-origin frames (like Claude) but not cross-origin ones. It is
+bounded per question by the missing-information/inspection budget. Do not extend
+it to JS *actions* (clicking/submitting) — the whole safety story rests on
+actions staying on the gated CDP-input path.
+
 ## 2026-09-14 — claude — restructure planner to DOM+screenshot / two-witness (0.9.2)
 
 **Did:** Reworked the planner's sense/verify loop to Dylan's design (validated by
