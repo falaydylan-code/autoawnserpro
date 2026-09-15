@@ -191,7 +191,18 @@
   // and it runs under a hard timeout. Answers are never entered through here --
   // that stays on the gated click/type path -- so a hijacked script cannot
   // submit or click destructively. The result is untrusted page data.
+  // A code-enforced read-only boundary for the extraction channel: the script
+  // is refused before it runs if it references network, storage, navigation,
+  // submission, or DOM-mutation APIs. Best-effort (obfuscation can evade a text
+  // filter), but it makes "read-only" a rule, not a request, and pairs with the
+  // coordinator re-observing after every script so a mutation to the answer
+  // surface trips the question/document guard. Actions still only happen on the
+  // gated typed-task path.
+  const FORBIDDEN_SCRIPT = /\b(?:fetch|XMLHttpRequest|WebSocket|EventSource|sendBeacon|importScripts|localStorage|sessionStorage|indexedDB|openDatabase|postMessage|Notification)\b|document\s*\.\s*cookie|\bimport\s*\(|\beval\s*\(|\bFunction\s*\(|\.\s*(?:submit|requestSubmit|click)\s*\(|\.\s*(?:innerHTML|outerHTML|value|checked|selected|textContent|src|action)\s*=|\.\s*(?:setAttribute|removeAttribute|append|appendChild|prepend|before|after|replaceWith|replaceChild|removeChild|remove|insertAdjacentHTML|insertAdjacentElement|insertBefore|setRangeText|execCommand|dispatchEvent|focus|blur|scrollIntoView)\s*\(|\blocation\s*=|location\s*\.\s*(?:href|assign|replace|reload)|\.\s*href\s*=|window\s*\.\s*open\s*\(/i;
+
   async function evaluate(id, expression, {timeout = 2000, cap = 16384} = {}) {
+    if (FORBIDDEN_SCRIPT.test(String(expression)))
+      return {ok: false, detail: 'Refused: an extraction script must be read-only. It may not use network, storage, navigation, submission, event dispatch, or DOM-mutation APIs; return values you read with querySelector/getAttribute/getBoundingClientRect/innerText instead.'};
     await attach(id);
     if (cancelled) cancelled = false;
     let r;

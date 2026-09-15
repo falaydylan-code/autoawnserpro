@@ -286,6 +286,6 @@ async def request_verify(body, transport):
     try:r=VerifyResponse.model_validate_json(raw)
     except ValidationError:raise ValueError('VALUE_MISMATCH: visual verification does not match the schema.') from None
     keys={e['slot_key'] for e in expected}
-    if r.kind=='mismatch' and (not r.mismatches or any(m not in keys for m in r.mismatches)):
-        raise ValueError('VALUE_MISMATCH: verification named a slot outside the checked set.')
+    if (r.kind=='verified' and r.mismatches) or (r.kind=='mismatch' and (not r.mismatches or any(m not in keys for m in r.mismatches))):
+        raise ValueError('VALUE_MISMATCH: verification response is internally inconsistent.')
     return r

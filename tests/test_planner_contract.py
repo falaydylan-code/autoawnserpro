@@ -84,9 +84,21 @@ def test_verify_contract_confirms_or_flags_known_slots_only():
  async def good(m,mt):return ('{"kind":"verified"}','stop')
  async def flag(m,mt):return ('{"kind":"mismatch","mismatches":["q/a"],"reason":"blank"}','stop')
  async def bogus(m,mt):return ('{"kind":"mismatch","mismatches":["q/not-a-slot"],"reason":"x"}','stop')
+ async def contra(m,mt):return ('{"kind":"verified","mismatches":["q/a"]}','stop')
  assert asyncio.run(planner.request_verify(body,good)).kind=='verified'
  assert asyncio.run(planner.request_verify(body,flag)).mismatches==['q/a']
  with pytest.raises(ValueError):asyncio.run(planner.request_verify(body,bogus))   # can't flag a slot it wasn't given
+ with pytest.raises(ValueError):asyncio.run(planner.request_verify(body,contra))  # verified + mismatches is contradictory
+
+def test_verify_phase_has_a_nonzero_budget(monkeypatch,tmp_path):
+ # Regression for the meter that rejected every /api/agent/verify call because
+ # 'verify' was missing from the phase-limit map (limit 0). The metering path is
+ # exercised directly, not bypassed.
+ import store,pytest
+ monkeypatch.setenv('DATA_DIR',str(tmp_path));monkeypatch.setenv('MAX_COST_PER_INVITE','5')
+ args=dict(owner='v',run_id='vr',question='q',phase='verify',cap=2,amount=.01,model='test')
+ for i in range(4):store.reserve_plan(request_id='vf%d'%i,**args);store.settle_plan('v','vf%d'%i,.001,{})
+ with pytest.raises(ValueError,match='BUDGET'):store.reserve_plan(request_id='vf4',**args)   # 5th exceeds the budget of 4
 
 def test_capabilities_negotiates_protocol_without_422():
  # The planner startup fetches /api/capabilities?protocol=4; the query int must

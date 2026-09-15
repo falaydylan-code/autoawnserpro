@@ -76,7 +76,7 @@ def reserve_plan(owner, run_id, request_id, question, phase, cap, amount, model)
         if calls>=int(setting('MAX_CALLS_PER_INVITE','100')) or cost+amount>float(setting('MAX_COST_PER_INVITE','2')) or run[2]+amount>min(cap,run[1]):
             raise ValueError('BUDGET_EXHAUSTED: remaining allowance cannot cover the maximum request cost.')
         count=con.execute('SELECT COUNT(*) FROM planner_calls WHERE run_id=? AND question=? AND phase=?',(run_id,question,phase)).fetchone()[0]
-        if count >= ({'repair':2,'plan':3,'visual':125}.get(phase,0)):raise ValueError('BUDGET_EXHAUSTED: question model-call budget reached.')
+        if count >= ({'repair':2,'plan':3,'visual':125,'verify':4}.get(phase,0)):raise ValueError('BUDGET_EXHAUSTED: question model-call budget reached.')
         con.execute('INSERT INTO planner_calls(id,run_id,question,phase,reserved,status,model) VALUES(?,?,?,?,?,?,?)',(request_id,run_id,question,phase,amount,'pending',model))
         con.execute('UPDATE usage SET calls=calls+1,unknown=unknown+1 WHERE owner=?',(owner,))
 

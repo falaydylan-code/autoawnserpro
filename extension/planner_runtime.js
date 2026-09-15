@@ -119,8 +119,12 @@
       }
     }
     async waitTask(task,budget=LIMITS.ui){const until=Date.now()+budget;let obs,s;do{await this.guard();obs=await this.observe();s=this.slot(obs,task.slot_key);if(this.matches(task,s))return {obs,s};await sleep(100)}while(Date.now()<until);throw new Fault('VALUE_MISMATCH','Expected answer did not appear in its logical slot.',s.current)}
-    async execute(task){
-      let obs=await this.observe(),s=this.slot(obs,task.slot_key);if(this.matches(task,s))return {obs,s,skipped:true};
+    async execute(task,force=false){
+      // `force` re-performs the input even when the DOM already matches -- used
+      // by the second witness so a screenshot mismatch triggers a REAL re-entry
+      // (clear+retype / re-select), never a silent skip that leaves the same
+      // unchanged state to be re-checked.
+      let obs=await this.observe(),s=this.slot(obs,task.slot_key);if(!force&&this.matches(task,s))return {obs,s,skipped:true};
       if(s.disabled)throw new Fault('GUARD_REJECTED','Answer field is disabled.');
       const d=task.desired;
       if(task.operation==='choose_one'||task.operation==='set_choice_set'){
@@ -303,8 +307,17 @@
     // the witness). No confirming screenshot for a question with no textual
     // answers to see.
     async confirmVisually(obs){
-      const expected=this.current.plan.tasks.filter(t=>this.current.completed[t.slot_key]&&plannedValue(t)!=='')
-        .map(t=>{const s=this.slot(obs,t.slot_key);return {slot_key:t.slot_key,label:s.label,value:plannedValue(t)}});
+      // Only confirm answers actually VISIBLE in the current viewport: a human
+      // (and the screenshot) cannot see an off-screen slot, so verifying it would
+      // be a false mismatch. Off-screen answers stay DOM-verified. Slots are
+      // measured against the live viewport, not assumed on screen.
+      const v=await this.b.viewport(this.tabId),expected=[];
+      for(const t of this.current.plan.tasks){
+        if(!this.current.completed[t.slot_key]||plannedValue(t)==='')continue;
+        const s=this.slot(obs,t.slot_key);let box=null;try{box=(await this.inspect(s.frame,s.target)).viewport}catch{box=null}
+        if(!box||box.y+box.h<0||box.y>v.height||box.x+box.w<0||box.x>v.width)continue;
+        expected.push({slot_key:t.slot_key,label:s.label,value:plannedValue(t)});
+      }
       if(!expected.length)return {kind:'verified'};
       const shot=await AssignmentVisual.screenshot(this.tabId),generation=this.generation;
       const observation=this.publicObservation(obs);observation.screenshot=shot.dataUrl;
@@ -327,7 +340,7 @@
         for(const k of result.mismatches){
           const task=this.current.plan.tasks.find(t=>t.slot_key===k);if(!task)continue;
           delete this.current.completed[k];await this.event('LOCAL_RECOVERY','Screenshot disagreed; re-entering answer',{slot_key:k,failure_code:'VALUE_MISMATCH',detail:result.reason});
-          const r=await this.execute(task);this.current.completed[k]={entry_verified:true,action_executed:!r.skipped,actual:r.s.current,save_state:r.obs.save_state,grade_state:r.obs.grade_state,document_id:r.obs.document_id};
+          const r=await this.execute(task,true);this.current.completed[k]={entry_verified:true,action_executed:!r.skipped,actual:r.s.current,save_state:r.obs.save_state,grade_state:r.obs.grade_state,document_id:r.obs.document_id};
         }
       }
     }

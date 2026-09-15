@@ -127,6 +127,24 @@ def test_model_authored_page_script_extraction_feeds_the_plan(extension):
     assert page.locator('td[data-value]').count() == 20
 
 
+def test_extraction_script_read_only_boundary(extension):
+    """The page-script channel enforces read-only in code: network, storage,
+    navigation, submission, and DOM-mutation scripts are refused before they run;
+    a plain read returns its value and the page is untouched."""
+    page, w, tid = navigate(extension, 'custom_dropdowns.html')
+    out = w.evaluate('''async id=>{await AssignmentVisual.attach(id);
+      return {
+        cookie:await AssignmentVisual.evaluate(id,'return document.cookie'),
+        net:await AssignmentVisual.evaluate(id,'return fetch("/x")'),
+        mutate:await AssignmentVisual.evaluate(id,'document.querySelector("td").textContent="HACKED";return 1'),
+        submit:await AssignmentVisual.evaluate(id,'return document.querySelector("input").click()'),
+        read:await AssignmentVisual.evaluate(id,'return document.querySelectorAll("td.responseCell").length')};}''', tid)
+    assert out['cookie']['ok'] is False and 'read-only' in out['cookie']['detail']
+    assert out['net']['ok'] is False and out['mutate']['ok'] is False and out['submit']['ok'] is False
+    assert out['read']['ok'] and out['read']['value'] == 20
+    assert page.locator('td').first.inner_text() == 'Accounts Payable'   # the refused mutation never ran
+
+
 def test_second_witness_screenshot_rejects_then_reenters(extension):
     """The confirming screenshot has teeth: when it reports an answer isn't
     visible, the harness drops that answer and re-enters it before finishing,
