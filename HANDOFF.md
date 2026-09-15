@@ -1,5 +1,42 @@
 # Handoff log
 
+## 2026-09-14 — claude — restructure planner to DOM+screenshot / two-witness (0.9.2)
+
+**Did:** Reworked the planner's sense/verify loop to Dylan's design (validated by
+a real Sonnet-5 Claude-in-Chrome run of the McGraw 20-cell question). (1) The
+PLAN call now always carries a settled screenshot, not just for graphs — the
+model plans from DOM + picture. (2) Two-witness verification is back: after
+per-answer DOM readback, `visualGate()` shows a screenshot to the model
+(new `/api/agent/verify`, `planner.request_verify`, strict `VerifyResponse`) to
+confirm the entered values are visible; a mismatch drops those answers and
+re-enters them, bounded by `LIMITS.verify=2`; graph points excluded. One
+confirming check per question. Also landed the Greptile PR #7 fixes just before
+(commit 498729e): identity no longer hashes full stem prose, dropdown ownership
+falls back to aria-expanded activation, unrelated frames are excluded not fatal,
+legacy gate no longer exempts graphs.
+
+**Verified:** 240 tests pass (one legacy browser test load-flakes in the full
+run, green in isolation — the documented flake). New tests: plan carries a
+screenshot; second witness rejects an answer and forces re-entry;
+`/api/agent/verify` confirms or flags only known slots. Backend deployed to
+Railway at 0.9.2 and live-verified (`/api/agent/verify` returns 401 not 404;
+`?protocol=4`→4). Pushed to origin `codex/planner-completion`; PR #7.
+
+**Left undone:** The "run arbitrary JavaScript like Claude" reach is deliberately
+NOT built — MV3 CSP forbids eval and it breaks the no-arbitrary-code guarantee.
+Most of its intent is already met (getScreenCTM coordinate extraction for
+drags/graphs; full DOM option lists incl. rendered off-screen). The residual gap
+is truly-novel widgets, which is the model-eval / per-platform-adapter path, not
+an eval bridge. Live McGraw validation still needs Dylan's login; planner stays
+preview/default-off.
+
+**Watch out:** always-screenshot means the planner now requires a vision model on
+every plan (was: only when a graph was present) and reserves the model's context
+length per call — more cost per question, which is the accuracy-over-cost trade
+Dylan chose (reverses SOP §14's "no screenshot for MCQ"). `/api/agent/verify`
+adds a model call per question; `LIMITS.verify` bounds re-checks. Ship together —
+0.9.2 extension needs the 0.9.2 backend.
+
 ## 2026-09-13 — claude — finish the protocol-4 planner (0.9.0 preview)
 
 **Did:** Picked up Codex's protocol-4 planner build (branch
