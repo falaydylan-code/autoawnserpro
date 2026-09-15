@@ -259,7 +259,11 @@
         const independent=e=>e.role==='checkbox'||e.role==='switch';
         const covered=e=>e.group!=null && boundGroups.has(e.group) && (exclusive(e) || (independent(e) && seenAtPlan.has(e.key)));
         const orderMembers=new Set([...this.questions.values()].flatMap(q=>[...q.parts.values()].filter(p=>p.kind==='ordering'&&p.verified).flatMap(p=>p.order_keys||[])));
-        const unplanned=page.elements.filter(e=>!e.disabled && answerTarget(e) && e.role!=='graph' && !bound.has(e.key) && !orderMembers.has(e.key) && !covered(e));
+        // A graph is NOT exempt from the unplanned-answer check: a canvas graph
+        // has no separate point elements, so an unplanned one would otherwise let
+        // auto hand-in submit with the graph blank. A graph that is a planned part
+        // is in `bound` (and, if unverified, already blocks via outstanding()).
+        const unplanned=page.elements.filter(e=>!e.disabled && answerTarget(e) && !bound.has(e.key) && !orderMembers.has(e.key) && !covered(e));
         if(unplanned.length)return 'Cannot hand in; unplanned answer controls: '+unplanned.map(e=>e.name||e.blank||e.key).join(', ');
         const blockers=(page.warnings||[]).filter(w=>!w.startsWith('Some custom elements expose no open shadow root'));
         if(blockers.length)return 'Cannot hand in while observation limitations remain: '+blockers.join('; ');

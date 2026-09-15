@@ -26,9 +26,16 @@
   function owner(option,cells){const menu=option.closest('[role=listbox]');if(!menu)return null;
     const labelled=(menu.getAttribute('aria-labelledby')||'').split(/\s+/);
     const owners=cells.filter(c=>labelled.includes(c.id)||(c.getAttribute('aria-controls')||'').split(/\s+/).includes(menu.id)||[...c.querySelectorAll('[aria-controls]')].some(t=>t.getAttribute('aria-controls')===menu.id));
-    return owners.length===1?owners[0]:null;}
+    if(owners.length===1)return owners[0];
+    if(owners.length>1)return null;                    // ambiguous ARIA linkage: refuse
+    // No ARIA link (real McGraw-style cells often omit it). Fall back to
+    // ACTIVATION evidence, not formatting: the cell the runtime just opened
+    // marks itself aria-expanded="true". Exactly one expanded cell unambiguously
+    // owns the single open menu; anything else stays null (WRONG_MENU_OWNER).
+    const expanded=cells.filter(c=>c.getAttribute('aria-expanded')==='true');
+    return expanded.length===1?expanded[0]:null;}
   function renderedText(root,exclude){let parts=[],count=0,complete=true;const walk=n=>{if(++count>12000){complete=false;return}if(n.nodeType===3){if(norm(n.textContent))parts.push(n.textContent);return}if(n.nodeType!==1)return;
-    if(exclude.has(n)||!shown(n)||n.matches('script,style,template,button,nav,output,[role=listbox],[role=option],[role=status],[role=alert],#__assignment_lab_cursor,#__assignment_lab_badges'))return;
+    if(exclude.has(n)||!shown(n)||n.matches('script,style,template,button,nav,output,[role=listbox],[role=option],[role=status],[role=alert],[aria-live],[class*=feedback],[class*=result],[class*=correct],[class*=grade],[class*=score],[class*=saved],[class*=attempt],#__assignment_lab_cursor,#__assignment_lab_badges'))return;
     if(n.matches('input,textarea,select'))return;for(const c of n.childNodes)walk(c);if(n.shadowRoot)for(const c of n.shadowRoot.childNodes)walk(c)};walk(root);return {text:norm(parts.join(' ')),complete};}
   function geometry(svg){
     if(svg.tagName.toLowerCase()!=='svg')return {calibrated:false,reason:'Opaque graph needs visual calibration.'};
@@ -53,7 +60,15 @@
     const platform=root.getAttribute('data-question-id')||'';
     const positionMatch=norm(document.body.innerText).match(/\bQuestion\s+(\d+)\s+(?:of|\/)\s*(\d+)\b/i);
     const enumeration=positionMatch?{index:Number(positionMatch[1]),total:Number(positionMatch[2])}:null;
-    const question_key=hash(location.pathname+'|'+location.hash+'|'+position+'|'+platform+'|'+stem.text);
+    // Identity that survives dynamic answer-state text. A platform question id is
+    // authoritative and used alone. Without one, use the STABLE answer-control
+    // structure (element keys, not their changing labels) plus the navigation
+    // position and the feedback-stripped stem -- so a "completed" note, an attempt
+    // counter or a "saved" annotation appearing after input does not fork the
+    // question into a new key and abandon the verified answer.
+    const structure=elements.map(e=>key(e)).join(',');
+    const question_key=hash(platform ? location.pathname+'|qid:'+platform
+      : location.pathname+'|'+location.hash+'|'+position+'|'+structure+'|'+stem.text);
     const targets=new Map(),slots=[],groups=new Map();let incomplete=!stem.complete||elements.length>2000;
     const target=e=>{const token=key(e);if(targets.has(token)&&targets.get(token)!==e){incomplete=true;return token}targets.set(token,e);return token};
     const add=(e,kind,label,options=[],current='')=>{const token=target(e);const slot={slot_key:question_key+'/'+token,kind,label:label||kind,options,current,target:token,disabled:e.disabled===true||e.getAttribute('aria-disabled')==='true',native:e.tagName==='SELECT'};slots.push(slot);return slot};

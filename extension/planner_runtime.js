@@ -43,26 +43,38 @@
     async event(phase,detail,fields={}){this.ledger.phase=phase;const row={time:new Date().toISOString(),run_id:this.id,question_key:this.current?.key,phase,detail,...fields};this.ledger.events.push(row);if(this.ledger.events.length>1000)this.ledger.events.shift();await this.persist();this.b.emit({kind:phase==='NEEDS_REVIEW'?'error':'info',message:detail,phase,...fields});}
     async observe(){await this.guard();
       const locations=await chrome.scripting.executeScript({target:{tabId:this.tabId,allFrames:true},func:()=>({origin:location.origin,url:location.href})});
-      const frames=[],queue=[locations.find(f=>f.frameId===0)],visited=new Set();
+      const frames=[],queue=[locations.find(f=>f.frameId===0)],visited=new Set();let excluded=0;
       while(queue.length){const f=queue.shift();if(!f)throw new Fault('FRAME_UNREADABLE','Top assignment frame unavailable.');if(visited.has(f.frameId))continue;visited.add(f.frameId);
-        if(!this.b.allowed(f.result.origin))throw new Fault('FRAME_UNREADABLE','A relevant frame is outside the authorized site; its contents were not read.');
+        // The top frame is the bound tab (its site is already enforced). Any other
+        // queued frame outside the authorized site is EXCLUDED, never fatal -- an
+        // unrelated cross-site ad, video or support widget must not stop a readable
+        // question. Whether an exclusion actually matters is decided below, once we
+        // know if any answer slot survived.
+        if(f.frameId!==0&&!this.b.allowed(f.result.origin)){excluded++;continue;}
         await this.guard();await chrome.scripting.executeScript({target:{tabId:this.tabId,frameIds:[f.frameId]},files:['planner_content.js']});let p;
-        try{p=await chrome.tabs.sendMessage(this.tabId,{type:'planner_inspect',operation:'observe'},{frameId:f.frameId})}catch{throw new Fault('FRAME_UNREADABLE','Frame '+f.frameId+' did not respond.')}
+        try{p=await chrome.tabs.sendMessage(this.tabId,{type:'planner_inspect',operation:'observe'},{frameId:f.frameId})}catch{if(f.frameId===0)throw new Fault('FRAME_UNREADABLE','Top assignment frame did not respond.');excluded++;continue}
         requireOK(p);frames.push({...p,frame_id:f.frameId,browser_document:f.documentId});
         for(const child of p.frames){const candidates=locations.filter(n=>n.frameId!==f.frameId&&n.result.url===child.src);
-          if(candidates.length!==1)throw new Fault('FRAME_UNREADABLE','A relevant child frame is inaccessible, redirected or ambiguous.');queue.push(candidates[0]);}
+          // Follow a child only when it resolves to exactly one allowed same-site
+          // frame. An ambiguous (duplicate-URL) or cross-site child is excluded,
+          // not fatal; the no-slot check below turns it into FRAME_UNREADABLE only
+          // if the question actually depended on it.
+          if(candidates.length===1&&this.b.allowed(candidates[0].result.origin))queue.push(candidates[0]);else excluded++;}
       }
       if(!frames.length)throw new Fault('FRAME_UNREADABLE','No readable assignment frame.');
       const frameOffset=(f,seen=new Set())=>{if(f.frame_id===0)return {x:0,y:0};if(seen.has(f.frame_id))return null;seen.add(f.frame_id);
         const owners=frames.flatMap(parent=>parent.frames.filter(child=>child.src===f.url).map(child=>({parent,child})));if(owners.length!==1||!owners[0].child.exact)return null;
         const {parent,child}=owners[0],above=frameOffset(parent,seen);return above?{x:above.x+child.x,y:above.y+child.y}:null};
       for(const f of frames)f.measured_offset=frameOffset(f);
-      const expected=frames.reduce((n,f)=>n+f.frames.length,1);
-      if(frames.length<expected)throw new Fault('FRAME_UNREADABLE','A visible frame could not be inspected.');
       const active=frames.filter(f=>f.slots.length),used=active.length?active:frames;
       const question_key=hash(used.map(f=>f.frame_id+':'+f.question_key).join('|'));
       const document_id=hash(frames.map(f=>f.frame_id+':'+f.document_id+':'+f.browser_document).join('|'));
       const slots=active.flatMap(f=>f.slots.map(s=>({...s,slot_key:question_key+'/'+f.frame_id+'/'+s.slot_key,local_slot:s.slot_key,frame_id:f.frame_id,frame:f})));
+      // Excluding an unrelated frame is fine as long as a readable frame still
+      // holds answer slots. If nothing readable has a slot AND a frame was
+      // excluded, the question may have lived in the excluded frame: say so
+      // explicitly rather than planning on a partial view.
+      if(!slots.length&&excluded)throw new Fault('FRAME_UNREADABLE','A frame that may hold the question could not be read (cross-site, ambiguous, or unresponsive); its contents were excluded.');
       const obs={question_key,document_id,observation_id:crypto.randomUUID(),question:used.map(f=>f.question).join('\n'),slots,frames,
         completeness:{complete:slots.length<=100&&frames.every(f=>f.completeness.complete),note:(slots.length>100?'More than 100 answer slots; narrow the question scope. ':'')+frames.map(f=>f.completeness.note).filter(Boolean).join('; ')},
         enumeration:frames.find(f=>f.enumeration)?.enumeration||null,
