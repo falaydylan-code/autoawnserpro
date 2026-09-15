@@ -1,0 +1,133 @@
+﻿/* Packaged, bounded DOM inspection. No eval, MAIN-world code, storage or network.
+   All tokens refer to this observation, not arbitrary selectors supplied by a model. */
+(() => {
+  if(globalThis.__assignmentPlannerInspector)return;
+  const doc=crypto.randomUUID(), nodes=new WeakMap(); let serial=0,last=null,limited=false;
+  const norm=s=>String(s??'').replace(/\s+/g,' ').trim();
+  const fail=(code,detail)=>({ok:false,code,detail});
+  const dropdown='select,[role=combobox],td.dropDownList,td[dropdowntype],td.responseCell[tabindex]';
+  const sensitive=/password|credit.?card|card.?number|cvv|cvc|social.?security|ssn|iban|routing|account.?number/i;
+  const forbidden=/^(?:delete|remove|discard|reset|sign\s*(?:in|out)|log\s*(?:in|out)|register|accept|agree|allow|consent|download|export|purchase|buy|pay|checkout)\b/i;
+  const shown=e=>!!e?.isConnected&&!e.closest('[hidden],[aria-hidden=true],script,style,template')&&getComputedStyle(e).visibility!=='hidden'&&getComputedStyle(e).display!=='none'&&!!e.getClientRects().length;
+  const name=e=>norm(e.getAttribute('aria-label')||[...(e.labels||[])].map(l=>l.innerText).join(' ')||e.innerText||e.getAttribute('title')||e.getAttribute('placeholder')||'');
+  const safe=e=>!sensitive.test([e.type,e.name,e.id,e.autocomplete,e.getAttribute('aria-label')].join(' '))&&!['password','hidden','file'].includes(e.type);
+  const key=e=>e.id?'id:'+e.id:(e.matches('td,th')?'cell:'+(e.closest('table')?.id||'table')+':'+e.parentElement.rowIndex+':'+e.cellIndex:(e.getAttribute('data-slot-id')?'slot:'+e.getAttribute('data-slot-id'):(nodes.has(e)?nodes.get(e):(nodes.set(e,'node:'+(++serial)),nodes.get(e)))));
+  const hash=s=>{let n=2166136261;for(const c of s)n=Math.imul(n^c.charCodeAt(0),16777619);return (n>>>0).toString(16)};
+  function all(root,selector){const found=[];let budget=12000;
+    const scan=(r,depth)=>{if(depth>12){limited=true;return}const walker=document.createTreeWalker(r,NodeFilter.SHOW_ELEMENT);let el;
+      while((el=walker.nextNode())){if(--budget<0){limited=true;return}if(el.matches(selector))found.push(el);if(el.shadowRoot)scan(el.shadowRoot,depth+1);if(budget<0)return}};
+    scan(root,0);return found;
+  }
+  function value(e){if(e.tagName==='SELECT')return norm(e.selectedOptions[0]?.text);if(e.matches('input,textarea'))return e.value;
+    const copy=e.cloneNode(true);copy.querySelectorAll('button,input,[role=listbox],[role=option],.dropdownButton,[aria-hidden=true]').forEach(n=>n.remove());
+    return norm(e.getAttribute('aria-valuetext')||e.querySelector('.dropdownValue')?.innerText||copy.textContent);}
+  function offset(){let x=0,y=0,w=window;try{while(w!==w.top){const f=w.frameElement;if(!f)return null;const st=w.parent.getComputedStyle(f),r=f.getBoundingClientRect();if(st.transform!=='none'||st.zoom&&Number(st.zoom)!==1||Math.abs(r.width-f.offsetWidth)>1)return null;x+=r.x+f.clientLeft;y+=r.y+f.clientTop;w=w.parent;}return {x,y};}catch{return null}}
+  function rect(e){const r=e.getBoundingClientRect(),off=offset();return {local:{x:r.x,y:r.y,w:r.width,h:r.height},viewport:off?{x:r.x+off.x,y:r.y+off.y,w:r.width,h:r.height}:null}}
+  function owner(option,cells){const menu=option.closest('[role=listbox]');if(!menu)return null;
+    const labelled=(menu.getAttribute('aria-labelledby')||'').split(/\s+/);
+    const owners=cells.filter(c=>labelled.includes(c.id)||(c.getAttribute('aria-controls')||'').split(/\s+/).includes(menu.id)||[...c.querySelectorAll('[aria-controls]')].some(t=>t.getAttribute('aria-controls')===menu.id));
+    if(owners.length===1)return owners[0];
+    if(owners.length>1)return null;                    // ambiguous ARIA linkage: refuse
+    // No ARIA link (real McGraw-style cells often omit it). Fall back to
+    // ACTIVATION evidence, not formatting: the cell the runtime just opened
+    // marks itself aria-expanded="true". Exactly one expanded cell unambiguously
+    // owns the single open menu; anything else stays null (WRONG_MENU_OWNER).
+    const expanded=cells.filter(c=>c.getAttribute('aria-expanded')==='true');
+    return expanded.length===1?expanded[0]:null;}
+  function renderedText(root,exclude){let parts=[],count=0,complete=true;const walk=n=>{if(++count>12000){complete=false;return}if(n.nodeType===3){if(norm(n.textContent))parts.push(n.textContent);return}if(n.nodeType!==1)return;
+    if(exclude.has(n)||!shown(n)||n.matches('script,style,template,button,nav,output,[role=listbox],[role=option],[role=status],[role=alert],[aria-live],[class*=feedback],[class*=result],[class*=correct],[class*=grade],[class*=score],[class*=saved],[class*=attempt],#__assignment_lab_cursor,#__assignment_lab_badges'))return;
+    if(n.matches('input,textarea,select'))return;for(const c of n.childNodes)walk(c);if(n.shadowRoot)for(const c of n.shadowRoot.childNodes)walk(c)};walk(root);return {text:norm(parts.join(' ')),complete};}
+  function geometry(svg){
+    if(svg.tagName.toLowerCase()!=='svg')return {calibrated:false,reason:'Opaque graph needs visual calibration.'};
+    const circles=[...svg.querySelectorAll('circle[data-point-id],circle[tabindex],circle[draggable=true]')].filter(shown);
+    // Labeled SVG ticks define the transformation; never read page answer keys or private state.
+    const labels=[...svg.querySelectorAll('text')].filter(shown).map(e=>({e,n:Number(norm(e.textContent))})).filter(p=>Number.isFinite(p.n)&&norm(p.e.textContent)!=='');
+    const axis=which=>labels.filter(p=>p.e.getAttribute('data-axis')===which).map(p=>({math:p.n,user:Number(p.e.getAttribute(which))}));
+    const fit=points=>{if(points.length<2)return null;const a=points[0],b=points.find(p=>p.math!==a.math);if(!b)return null;const scale=(b.user-a.user)/(b.math-a.math),origin=a.user-a.math*scale;if(!scale||!Number.isFinite(scale)||points.some(p=>Math.abs(p.user-(origin+p.math*scale))>.5))return null;return {scale,origin,min:Math.min(...points.map(p=>p.math)),max:Math.max(...points.map(p=>p.math))}};
+    const x=fit(axis('x')),y=fit(axis('y')),ctm=svg.getScreenCTM(),off=offset();
+    if(!x||!y||!ctm||!off||!circles.length)return {calibrated:false,reason:'Need two labeled ticks per axis, visible point IDs and measurable frame transform.',svg:svg.viewBox.baseVal?{width:svg.viewBox.baseVal.width,height:svg.viewBox.baseVal.height}:null};
+    const points=circles.map(c=>{const mat=c.getScreenCTM(),screen=new DOMPoint(c.cx.baseVal.value,c.cy.baseVal.value).matrixTransform(mat),u=screen.matrixTransform(ctm.inverse());return {id:c.getAttribute('data-point-id')||c.id||key(c),x:(u.x-x.origin)/x.scale,y:(u.y-y.origin)/y.scale,viewport:{x:screen.x+off.x,y:screen.y+off.y}}});
+    return {calibrated:true,units:'math',x,y,matrix:{a:ctm.a,b:ctm.b,c:ctm.c,d:ctm.d,e:ctm.e+off.x,f:ctm.f+off.y},points,tolerance:.02};
+  }
+  function observe(){
+    limited=false;
+    const candidates=all(document,'[data-question-id],main,[role=main],.question-content').filter(shown);
+    const root=candidates.find(e=>e.matches('[data-question-id]')&&e.querySelector('input,textarea,select,td.responseCell,svg,canvas'))||candidates.find(e=>e.matches('main,[role=main]'))||document.body;
+    const elements=all(root,'input,textarea,select,[role=radio],[role=checkbox],[role=combobox],td.dropDownList,td[dropdowntype],td.responseCell[tabindex],ol[data-sortable],[data-rbd-droppable-id],svg,canvas').filter(e=>shown(e)&&safe(e));
+    const cells=elements.filter(e=>e.matches(dropdown)&&!(e.closest('td.responseCell')&&e.closest('td.responseCell')!==e));
+    const excluded=new Set(elements.filter(e=>!['radio','checkbox'].includes(e.type)&&!e.matches('[role=radio],[role=checkbox]')));
+    const stem=renderedText(root,excluded); const position=norm(document.querySelector('[aria-current=step],[aria-current=page],.question-number')?.textContent);
+    const platform=root.getAttribute('data-question-id')||'';
+    const positionMatch=norm(document.body.innerText).match(/\bQuestion\s+(\d+)\s+(?:of|\/)\s*(\d+)\b/i);
+    const enumeration=positionMatch?{index:Number(positionMatch[1]),total:Number(positionMatch[2])}:null;
+    // Identity that survives dynamic answer-state text. A platform question id is
+    // authoritative and used alone. Without one, use the STABLE answer-control
+    // structure (element keys, not their changing labels) plus the navigation
+    // position and the feedback-stripped stem -- so a "completed" note, an attempt
+    // counter or a "saved" annotation appearing after input does not fork the
+    // question into a new key and abandon the verified answer.
+    const structure=elements.map(e=>key(e)).join(',');
+    const question_key=hash(platform ? location.pathname+'|qid:'+platform
+      : location.pathname+'|'+location.hash+'|'+position+'|'+structure+'|'+stem.text);
+    const targets=new Map(),slots=[],groups=new Map();let incomplete=!stem.complete||elements.length>2000;
+    const target=e=>{const token=key(e);if(targets.has(token)&&targets.get(token)!==e){incomplete=true;return token}targets.set(token,e);return token};
+    const add=(e,kind,label,options=[],current='')=>{const token=target(e);const slot={slot_key:question_key+'/'+token,kind,label:label||kind,options,current,target:token,disabled:e.disabled===true||e.getAttribute('aria-disabled')==='true',native:e.tagName==='SELECT'};slots.push(slot);return slot};
+    for(const e of elements){
+      if(e.matches('input[type=radio],input[type=checkbox],[role=radio],[role=checkbox]')){
+        const type=e.type||e.getAttribute('role'),group=e.closest('fieldset,[role=radiogroup],[role=group]')||root;
+        const gid=type+':'+key(group)+':'+(type==='radio'?(e.name||''): '');
+        if(!groups.has(gid))groups.set(gid,[]);groups.get(gid).push(e);
+      }else if(cells.includes(e)){const s=add(e,'selection',name(e)||norm(e.closest('tr')?.cells[0]?.textContent),e.tagName==='SELECT'?[...e.options].map(o=>norm(o.text)):[],value(e));
+        s.representations=[...e.querySelectorAll('.dropdownButton,[aria-haspopup],[role=combobox]')].filter(shown).map(target);
+      }else if(e.matches('input:not([type=button]):not([type=submit]):not([type=reset]),textarea')&&!e.closest('td.responseCell,[role=combobox]'))add(e,'value',name(e),[],value(e));
+      else if(e.matches('ol[data-sortable],[data-rbd-droppable-id]')){const items=[...e.children].filter(shown);const s=add(e,'ordering',name(e),items.map(name),items.map(name));s.items=items.map(n=>({label:name(n),target:target(n)}));}
+      else if(e.matches('svg,canvas')&&(e.matches('[data-graph],[role=graph],canvas')||e.querySelector('circle[data-point-id],circle[tabindex]'))){const g=geometry(e),s=add(e,'position',name(e)||'Graph',[],g.points||[]);s.geometry=g;}
+    }
+    for(const [gid,es] of groups){const group=es[0].closest('fieldset,[role=radiogroup],[role=group]')||es[0];const s=add(group,gid.startsWith('radio')?'choice':'choice_set',name(group)||'Choose',es.map(name),es.filter(e=>e.checked||e.getAttribute('aria-checked')==='true').map(name));
+      s.slot_key=question_key+'/'+gid;s.choices=es.map(e=>({label:name(e),target:target(e),checked:!!e.checked||e.getAttribute('aria-checked')==='true',disabled:!!e.disabled||e.getAttribute('aria-disabled')==='true'}));}
+    const menus=all(document,'[role=listbox] [role=option]').filter(shown).map(e=>{const c=owner(e,cells);return {label:name(e),target:target(e),owner:c?question_key+'/'+key(c):null,disabled:!!e.disabled||e.getAttribute('aria-disabled')==='true'}});
+    const navigation=all(document,'button,a,[role=button],input[type=submit]').filter(shown).map(e=>{
+      const label=name(e)||e.value||'';let kind='';
+      if(forbidden.test(label))return null;
+      if(/^(next(?: question| part)?|continue)$/i.test(label))kind='advance';
+      else if(/^(try it!?|check(?: my work| answer)?|submit answer)$/i.test(label))kind='check';
+      else if(/^(submit(?: assignment| all answers)?|finish(?: assignment)?|hand in|turn in)$/i.test(label))kind='submit';
+      return kind?{kind,label,target:target(e),disabled:!!e.disabled||e.getAttribute('aria-disabled')==='true'}:null}).filter(Boolean);
+    const feedback=all(document,'[role=status],[role=alert],output,.feedback,.correct-answer').filter(shown).map(e=>norm(e.innerText)).join(' ');
+    const locked=/correct|incorrect|your answer/i.test(feedback)&&slots.length>0&&slots.every(s=>s.disabled||s.choices?.every(c=>c.disabled));
+    const page_state=/assignment (?:is )?(?:complete|submitted)/i.test(feedback)?'complete':locked?'locked':'answering';
+    const observation_id=crypto.randomUUID();
+    last={observation_id,question_key,document_id:doc,question:stem.text||norm(document.title),slots,menus,navigation,feedback,page_state,enumeration,
+      save_state:/\bsaved\b/i.test(feedback)?'confirmed':/\bsaving\b/i.test(feedback)?'pending':'unavailable',
+      grade_state:/incorrect|wrong/i.test(feedback)?'incorrect':/partial/i.test(feedback)?'partial':/correct/i.test(feedback)?'correct':'unknown',
+      completeness:{complete:!incomplete&&!limited,note:(incomplete||limited)?'QUESTION_INCOMPLETE: traversal or identity limit; inspect a smaller question.':''},targets,
+      frames:all(root,'iframe,frame').filter(shown).map(e=>{const r=e.getBoundingClientRect();let exact=true;for(let n=e;n;n=n.parentElement)if(getComputedStyle(n).transform!=='none')exact=false;return {src:e.src,title:e.title,x:r.x+e.clientLeft,y:r.y+e.clientTop,exact:exact&&Math.abs(r.width-e.offsetWidth)<1}}),visual:!!root.querySelector('img,svg,canvas')};
+    const {targets:ignored,...publicState}=last;
+    return {ok:true,...publicState,origin:location.origin,url:location.href,host:location.host};
+  }
+  function inspect(m){
+    if(m.operation==='identity')return {ok:true,document_id:doc};
+    if(m.operation==='observe')return observe();
+    if(!last||m.document_id!==doc||m.observation_id!==last.observation_id)return fail('TARGET_STALE','Expired document or observation.');
+    const freshQuestion=(()=>{const prior=last;const current=observe();last=prior;return current.question_key})();
+    if(freshQuestion!==last.question_key)return fail('TARGET_STALE','Question changed.');
+    const e=last.targets.get(m.target);
+    if(!e||!shown(e)||!safe(e))return fail('TARGET_MISSING','Target unavailable or excluded.');
+    if(m.operation==='inspect_svg_geometry')return {ok:true,geometry:geometry(e)};
+    if(m.operation==='inspect_scroll_container'){let n=e;while(n&&n.scrollHeight<=n.clientHeight+1)n=n.parentElement;const el=n||document.scrollingElement;return {ok:true,top:el.scrollTop,left:el.scrollLeft,height:el.clientHeight,max:el.scrollHeight-el.clientHeight,rect:rect(el)}};
+    if(!['inspect_frame','inspect_slot','inspect_options','read_control_state','measure_target'].includes(m.operation))return fail('GUARD_REJECTED','Unknown packaged inspection.');
+    const box=rect(e),s=last.slots.find(s=>s.target===m.target);
+    const point=m.point||{x:box.local.x+box.local.w/2,y:box.local.y+box.local.h/2};
+    let hit=document.elementFromPoint(point.x,point.y);while(hit?.shadowRoot?.elementFromPoint(point.x,point.y))hit=hit.shadowRoot.elementFromPoint(point.x,point.y);
+    const actionable=shown(e)&&!e.disabled&&e.getAttribute('aria-disabled')!=='true';
+    const focused=(e.getRootNode().activeElement||document.activeElement)===e;
+    return {ok:true,...box,actionable,hit:!!hit&&(hit===e||e.contains(hit)||[...(e.labels||[])].some(l=>l===hit||l.contains(hit))),focused,tag:e.tagName,value:value(e),
+      checked:!!e.checked||e.getAttribute('aria-checked')==='true',options:e.tagName==='SELECT'?[...e.options].map(o=>({label:norm(o.text),selected:o.selected,disabled:o.disabled||o.parentElement.disabled===true})):undefined,
+      slot:s?.slot_key,selectedIndex:e.tagName==='SELECT'?e.selectedIndex:undefined};
+  }
+  globalThis.__assignmentPlannerInspector=true;
+  chrome.runtime.onMessage.addListener((m,sender,reply)=>{if(m.type!=='planner_inspect')return false;try{const result=inspect(m);const bytes=new TextEncoder().encode(JSON.stringify(result)).length;
+    if(m.operation!=='observe'&&bytes>16384)reply(fail('QUESTION_INCOMPLETE','Inspection exceeds 16 KB; narrow its scope.'));
+    else if(bytes>100000)reply(fail('QUESTION_INCOMPLETE','Observation exceeds 100 KB; narrow its scope.'));
+    else reply(result);}catch{reply(fail('FRAME_UNREADABLE','Inspection could not read this frame.'));}return true});
+})();

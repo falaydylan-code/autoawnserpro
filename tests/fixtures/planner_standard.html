@@ -1,0 +1,8 @@
+﻿<!doctype html><meta charset="utf-8"><title>Planner contract fixture</title>
+<style>body{font:18px sans-serif}main{margin:20px;max-width:700px}label{display:block;padding:12px}input[type=text]{width:180px;padding:10px}button{padding:12px}#irrelevant{position:fixed;right:10px;top:10px}</style>
+<main data-question-id="fixture-q1"><h1>Choose and enter the requested values</h1>
+<fieldset id="single"><legend>Choose B</legend><label><input type="radio" name="single" value="A">A</label><label><input type="radio" name="single" value="B">B</label></fieldset>
+<fieldset id="multiple"><legend>Select A and C only</legend><label><input type="checkbox" value="A">A</label><label><input type="checkbox" value="B" checked>B</label><label><input type="checkbox" value="C">C</label></fieldset>
+<label>Amount<input id="amount" type="text"></label><output id="saved" role="status"></output>
+<button id="submit" onclick="window.submitted++">Submit</button></main><span id="irrelevant"></span>
+<script>window.submitted=0;window.entries=0;amount.addEventListener('input',()=>window.entries++);amount.addEventListener('blur',()=>{saved.textContent='Saving';setTimeout(()=>saved.textContent='Saved',180)});setInterval(()=>irrelevant.textContent=Date.now(),25)</script>

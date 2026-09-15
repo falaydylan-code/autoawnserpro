@@ -2,13 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Assignment Lab 2.0</title>
 <link rel="stylesheet" href="sidepanel.css">
 </head>
 <body>
 
 <header>
-  <span class="brand">Assignment Lab 2.0</span>
+  <img class="brand-logo" src="icons/logo.png" width="32" height="32" alt=""><span class="brand">Assignment Lab <small>2.0</small></span>
+  <button id="settings-toggle" class="icon-button" aria-label="Open settings" aria-expanded="false">&#9881;</button>
   <button id="eth" class="eth off" type="button" aria-pressed="false"
           title="Browser control is off. Click to arm it.">ETH</button>
 </header>
@@ -19,26 +21,17 @@
 
   <div id="banner" class="banner" hidden></div>
 
-  <label class="check"><input id="advance" type="checkbox">
-    Keep going after each question</label>
-  <p class="hint" style="margin:2px 0 10px">Lets the agent press Next, Continue or a
-    confidence rating after all parts are verified. Part tabs remain usable when this is off.</p>
-  <label class="check"><input id="auto_submit" type="checkbox"> Hand in when every known part is verified</label>
-  <p class="hint">Off by default. Verification confirms entered values, not academic correctness.</p>
-  <label class="check"><input id="badges" type="checkbox" checked> Number controls in screenshots</label>
-  <label class="check"><input id="double_check" type="checkbox" checked> Confirm each answer with a screenshot too</label>
-  <p class="hint">On by default. After the page reports an answer is in, the model is shown a fresh
-    screenshot and must read the same value back before the part counts as done. Costs one extra
-    model call per answer.</p>
-  <p class="hint" style="margin:6px 0 10px"><strong>Why Chrome mentions debugging.</strong> Some answer
-    boxes (McGraw Hill dropdowns, drag-to-order lists) give the page no control the agent can
-    press. For those it briefly uses Chrome's own mouse input, which Chrome labels
-    "debugging" and shows as a bar across the tab. It attaches only to your assignment tab,
-    only while a run needs it, and lets go on Stop, ETH off, or when the run ends.</p>
+  <section id="workspace">
+  <div id="status-pill" class="status-pill" role="status">Ready</div>
+  <div class="welcome"><h1 id="task-title">Ready when you are</h1><p id="task-description">Work through your assignment,<br>one step at a time.</p></div>
+  <div class="progress-card">
   <p id="progress" role="status" aria-live="polite">No parts planned yet.</p>
 
+  <progress id="part-meter" max="1" value="0" aria-label="Verified parts"></progress>
+  </div>
+  <div id="activity-card" class="activity-card"><span class="activity-icon" aria-hidden="true">&#10022;</span><div><strong id="activity-title">Your next step</strong><p id="activity-detail">Enable ETH browser access, then start your assignment.</p></div></div>
   <div class="controls">
-    <button id="start" class="primary" disabled>Read this page</button>
+    <button id="start" class="primary" disabled>&#9654; &nbsp; Start assignment</button>
     <button id="stop" disabled>Stop</button>
   </div>
 
@@ -48,6 +41,7 @@
     <div><span>COST</span><strong id="cost">$0.0000</strong></div>
   </div>
 
+  <details id="activity-log" open><summary>Activity log</summary>
   <div class="logbar">
     <label class="check"><input id="showthink" type="checkbox" checked> Show model thinking</label>
     <span class="grow"></span>
@@ -55,11 +49,44 @@
   </div>
   <ol id="log" class="log"><li class="muted">Nothing yet.</li></ol>
 
+  </details>
+  </section>
+  <section id="settings-view" hidden><div class="settings-heading"><h1>Settings</h1><button id="settings-back">Done</button></div>
+  <h2>Assignment behavior</h2>
+  <label class="check"><input id="planner_enabled" type="checkbox"> Structured planner (preview)</label>
+  <p class="hint">Plans the question once and verifies readable answers locally. Requires backend protocol 4. Turn off to use the previous loop. Graphs without calibrated geometry pause for review.</p>
+  <label class="check"><input id="check_work" type="checkbox"> Planner: check work once after entry</label><p class="hint">May consume a website attempt. Off by default.</p>
+  <button id="resume-run" type="button">Resume saved planner run</button>
+
+  <label class="check"><input id="advance" type="checkbox">
+    Keep going after each question</label>
+  <p class="hint" style="margin:2px 0 10px">Lets the agent press Next, Continue or a
+    confidence rating after all parts are verified. Part tabs remain usable when this is off.</p>
+  <label class="check"><input id="auto_submit" type="checkbox"> Hand in when every known part is verified</label>
+  <p class="hint">Off by default. Verification confirms entered values, not academic correctness.</p>
+  <label class="check"><input id="badges" type="checkbox" checked> Number controls in screenshots</label>
+  <label class="check"><input id="double_check" type="checkbox" checked> Legacy loop: confirm each answer with a screenshot too</label>
+  <p class="hint">On by default. After the page reports an answer is in, the model is shown a fresh
+    screenshot and must read the same value back before the part counts as done. Costs one extra
+    model call per answer.</p>
+  <p class="hint" style="margin:6px 0 10px"><strong>Why Chrome mentions debugging.</strong> Some answer
+    boxes (McGraw Hill dropdowns, drag-to-order lists) give the page no control the agent can
+    press. For those it briefly uses Chrome's own mouse input, which Chrome labels
+    "debugging" and shows as a bar across the tab. It attaches only to your assignment tab,
+    only while a run needs it, and lets go on Stop, ETH off, or when the run ends.</p>
+
+  <h2>Display</h2>
+  <label class="check"><input id="show-log" type="checkbox" checked> Show activity log</label>
+  <label class="check"><input id="show-cost" type="checkbox" checked> Show usage cost</label>
+  <h2>Connection</h2>
   <details id="setup">
     <summary>Setup</summary>
     <label>Backend<input id="backend" type="url" spellcheck="false"></label>
     <label>Model<input id="model" type="text" spellcheck="false" placeholder="minimax/minimax-m3"></label>
     <label>Note for the agent (optional)<input id="note" type="text" maxlength="200" placeholder="e.g. answer in decimals"></label>
+    <label>Stop a run after spending ($)<input id="spend_limit" type="number" min="0.10" step="0.10" placeholder="2.00"></label>
+    <p class="hint">There is no limit on questions or turns; a run goes until the assignment is
+      complete, you press Stop, it needs you, or this amount is spent.</p>
     <button id="save">Save</button>
     <p class="hint">Your API key never lives in this extension. Requests go to your
       backend, which holds the key and meters the spend.</p>
@@ -70,6 +97,8 @@
     enter passwords or payment details, accept banners, or solve captchas.
     Hand-in requires the switch above and a completed, verified parts checklist.
   </p>
+  </section>
+  <footer><span id="continue-summary">Auto-continue off</span><span id="submit-summary">Submission off</span></footer>
 </main>
 
 <script src="sidepanel.js"></script>

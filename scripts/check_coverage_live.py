@@ -22,7 +22,7 @@ sys.path.insert(0,str(ROOT))
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--env-file',type=Path,default=ROOT/'.env')
-    parser.add_argument('--fixture',default='multipart_tabs.html',choices=['multipart_tabs.html','matching_html5.html','matching_pointer.html','blanks_prose.html','table_blanks.html','shadow_question.html','ordering.html','custom_dropdowns.html','closed_dropdown.html'])
+    parser.add_argument('--fixture',default='multipart_tabs.html',choices=['multipart_tabs.html','matching_html5.html','matching_pointer.html','blanks_prose.html','table_blanks.html','shadow_question.html','ordering.html','custom_dropdowns.html','closed_dropdown.html','graph_points.html','feedback_states.html?mode=locked','feedback_states.html?mode=retry','long_assignment.html?total=6','mcq_buttons.html'])
     parser.add_argument('--backend',default='')
     parser.add_argument('--url',default='')
     parser.add_argument('--timeout',type=int,default=240)
@@ -69,7 +69,7 @@ def main():
                     starts=page.get_by_role('button',name='Start',exact=True)
                     if starts.count():starts.first.click()
                 tab_id=worker.evaluate('(url)=>chrome.tabs.query({}).then(ts=>ts.find(t=>t.url===url).id)',page.url)
-                await_config={'backend':args.backend or f'http://127.0.0.1:{port}','model':os.environ.get('OPENROUTER_MODEL',''),'advance':False,'auto_submit':not bool(args.url),'badges':True,
+                await_config={'backend':args.backend or f'http://127.0.0.1:{port}','model':os.environ.get('OPENROUTER_MODEL',''),'advance':args.fixture.startswith(('feedback_states','long_assignment')),'auto_submit':not bool(args.url),'badges':True,'double_check':True,'spend_limit':0.5,
                     'note':('Complete every part of this one practice question, then use Submit Assignment when every part is verified. Do not start another question.' if not args.url else 'Answer this one practice question, use Check if available, then stop. Do not start another question.')}
                 worker.evaluate('(s)=>chrome.storage.local.set(s)',await_config)
                 extension_id=worker.url.split('/')[2]

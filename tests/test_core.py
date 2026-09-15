@@ -491,7 +491,7 @@ def test_a_field_already_holding_the_answer_is_treated_as_done():
 @pytest.mark.parametrize('raw', [
     '{"action":"drag","ref":1}',
     '{"action":"drag","ref":1,"to":1}',
-    '{"action":"press","ref":1,"key":"Control+L"}',
+    '{"action":"press","ref":1,"key":"Ctrl+L;rm -rf"}',
     '{"action":"press","ref":1}',
     '{"action":"click","ref":1,"mode":"javascript"}',
     '{"action":"read_check","parts":[{"id":"a","what":"A","answer":"1"},{"id":"a","what":"B","answer":"2"}]}',

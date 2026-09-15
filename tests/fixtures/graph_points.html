@@ -1,0 +1,33 @@
+<!doctype html><meta charset="utf-8"><title>Graph points</title>
+<style>canvas{border:1px solid #333;display:block;margin:10px 0;touch-action:none}button{padding:10px 16px}</style>
+<h1>Plot the three points</h1>
+<p>Drag each point to its coordinates: A to (1, 2), B to (3, 1), C to (4, 4). Then press Try it!</p>
+<canvas id="graph" width="400" height="400" aria-label="graph" tabindex="0"></canvas>
+<button type="button" id="tryit">Try it!</button>
+<output id="feedback"></output>
+<script>
+// A canvas graph: nothing inside it exists in the DOM, so the points can only
+// be found and moved from the picture. Axes run 0..5 on both sides.
+const c=document.getElementById('graph'),g=c.getContext('2d');
+const SIZE=400,PAD=40,UNIT=(SIZE-2*PAD)/5;
+window.points={A:{x:0,y:0},B:{x:0,y:0},C:{x:0,y:0}};
+window.target={A:{x:1,y:2},B:{x:3,y:1},C:{x:4,y:4}};
+const toPx=p=>({x:PAD+p.x*UNIT,y:SIZE-PAD-p.y*UNIT});
+const toGraph=px=>({x:Math.round((px.x-PAD)/UNIT*2)/2,y:Math.round((SIZE-PAD-px.y)/UNIT*2)/2});
+function draw(){
+  g.clearRect(0,0,SIZE,SIZE);g.strokeStyle='#bbb';g.lineWidth=1;
+  for(let i=0;i<=5;i++){const x=PAD+i*UNIT,y=SIZE-PAD-i*UNIT;g.beginPath();g.moveTo(x,PAD);g.lineTo(x,SIZE-PAD);g.stroke();g.beginPath();g.moveTo(PAD,y);g.lineTo(SIZE-PAD,y);g.stroke();
+    g.fillStyle='#333';g.font='12px sans-serif';g.fillText(String(i),x-3,SIZE-PAD+16);g.fillText(String(i),PAD-16,y+4);}
+  g.strokeStyle='#000';g.lineWidth=2;g.beginPath();g.moveTo(PAD,SIZE-PAD);g.lineTo(SIZE-PAD,SIZE-PAD);g.moveTo(PAD,SIZE-PAD);g.lineTo(PAD,PAD);g.stroke();
+  for(const [name,p] of Object.entries(window.points)){const q=toPx(p);g.fillStyle='#1976d2';g.beginPath();g.arc(q.x,q.y,9,0,7);g.fill();g.fillStyle='#fff';g.font='bold 11px sans-serif';g.fillText(name,q.x-4,q.y+4);}
+}
+let held=null;
+c.addEventListener('pointerdown',e=>{const r=c.getBoundingClientRect(),px={x:e.clientX-r.left,y:e.clientY-r.top};
+  for(const [name,p] of Object.entries(window.points)){const q=toPx(p);if(Math.hypot(q.x-px.x,q.y-px.y)<=14){held=name;break;}}});
+c.addEventListener('pointermove',e=>{if(!held)return;const r=c.getBoundingClientRect();const gpt=toGraph({x:e.clientX-r.left,y:e.clientY-r.top});
+  window.points[held]={x:Math.max(0,Math.min(5,gpt.x)),y:Math.max(0,Math.min(5,gpt.y))};draw();});
+c.addEventListener('pointerup',()=>{held=null;});
+document.getElementById('tryit').onclick=()=>{const ok=Object.keys(window.target).every(k=>window.points[k].x===window.target[k].x&&window.points[k].y===window.target[k].y);
+  document.getElementById('feedback').textContent=ok?'Your Answer: correct':'Your Answer: incorrect. Try again';};
+draw();
+</script>

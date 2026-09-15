@@ -22,6 +22,7 @@ from settings import ROOT, setting, missing
 from adapters import Selectors
 from runner import Run
 import agent
+import planner
 import store
 
 runs, tokens, attempts = {}, {}, {}
@@ -163,7 +164,7 @@ async def models(who=Depends(owner)):
             result.raise_for_status()
             models = result.json()['data']
         return [{'id': m['id'], 'vision': 'image' in m.get('architecture', {}).get('input_modalities', []),
-                 'pricing': m.get('pricing', {})} for m in models if 'minimax' in m['id'].lower()]
+                 'pricing': m.get('pricing', {}), 'context_length': m.get('context_length',0)} for m in models if 'minimax' in m['id'].lower()]
     except Exception:
         raise HTTPException(502, 'Could not load the live OpenRouter model list. Check internet access and retry.') from None
 
@@ -351,6 +352,7 @@ async def close(rid: str, who=Depends(owner)):
 class ObservedPart(agent.Part):
     entered: bool = False
     verified: bool = False
+    retired: bool = False
     target_key: str = Field(default='', max_length=600)
     source_key: str = Field(default='', max_length=600)
     source_label: str = Field(default='', max_length=400)
@@ -376,6 +378,10 @@ class ObservedElement(BaseModel):
     choice: bool = False
     external: bool = False
     dropdown: bool = False
+    trigger: bool = False
+    expanded: bool = False
+    opaque: bool = False
+    qid: str = Field(default='', max_length=200)
     owner_ref: int | None = None
     list_ref: int | None = None
     order_index: int | None = None
@@ -393,13 +399,16 @@ class Observation(BaseModel):
     elements: list[ObservedElement] = Field(default_factory=list, max_length=400)
     text: str = Field(default='', max_length=200_000)
     host: str = Field(default='', max_length=300)
-    step: int = Field(default=1, ge=1, le=500)
-    step_budget: int = Field(default=8, ge=1, le=100)
+    step: int = Field(default=1, ge=1, le=10000)
+    step_budget: int = Field(default=8, ge=1, le=1000)
     page_changed: bool = True
     last_action: dict = Field(default_factory=dict)
     task_note: str = Field(default='', max_length=2000)
     phase: Literal['', 'read_check', 'act', 'must_act', 'navigate', 'verify'] = ''
     observation_id: str = Field(default='', max_length=80)
+    page_state: Literal['', 'answering', 'editable_feedback', 'locked', 'loading', 'complete'] = ''
+    feedback: str = Field(default='', max_length=400)
+    attempts_left: int | None = Field(default=None, ge=0, le=1000)
     verification: VerificationTarget | None = None
     plan: str = Field(default='', max_length=2000)
     progress: str = Field(default='', max_length=4000)
@@ -411,8 +420,96 @@ class Observation(BaseModel):
 
 
 @app.get('/api/capabilities')
-async def capabilities():
-    return {'protocol': 2, 'extension': '0.7.2', 'features': ['parts', 'ordering', 'visual_input', 'visual_verification']}
+async def capabilities(protocol: int = 3):
+    # The extension refuses to start against a backend that does not report the
+    # protocol it needs, so a stale deploy is an actionable message, not a loop.
+    # Protocol 4 adds the planner path (a whole-question plan of typed tasks,
+    # deterministic execution, harness-owned verification, bounded repair). The
+    # protocol-3 features remain listed so the retained per-action fallback path
+    # keeps working against the same backend.
+    #
+    # `protocol` is a plain int query param (FastAPI coerces "4" -> 4) and is
+    # echoed only when it names a protocol this backend speaks; anything else
+    # falls back to the protocol-3 default rather than 422-ing the negotiation,
+    # so the planner's `?protocol=4` request actually returns protocol 4.
+    protocol = protocol if protocol in (3, 4) else 3
+    return {'protocol': protocol, 'extension': '0.9.3', 'supported_protocols': [3,4],
+            'planner_release': 'preview',
+            'features': ['parts', 'ordering', 'visual_input', 'visual_verification', 'browser_input', 'page_states', 'no_step_ceiling',
+                         'task_plans', 'scoped_observations', 'stable_slots', 'typed_verification', 'bounded_repair', 'geometry_inspection']}
+
+
+async def planner_endpoint(body, request, who, repair=False, visual=False, verify=False):
+    import math
+    import json
+    throttle(request, 'planner', per_ip=1500, per_global=9000, window=600,
+             message='Too many planning calls. Wait before retrying.')
+    selected=body.model or setting('OPENROUTER_MODEL')
+    registry=await models(who)
+    entry=next((m for m in registry if m['id']==selected),None)
+    if not entry or (body.observation.screenshot and not entry['vision']):
+        raise HTTPException(400,'Select an available model with image support when the question needs images.')
+    observation=body.observation.model_dump()
+    pricing=entry.get('pricing') or {}
+    try:
+        inp,out,fee=(float(pricing[k]) for k in ('prompt','completion','request')) if 'request' in pricing else (float(pricing['prompt']),float(pricing['completion']),0)
+        inp=max(inp,float(pricing.get('input_cache_write') or 0),float(pricing.get('input_cache_read') or 0));out=max(out,float(pricing.get('internal_reasoning') or 0))
+        if any(not math.isfinite(x) or x<0 for x in (inp,out,fee)):raise ValueError()
+        # UTF-8 bytes upper-bound text token count; allow chat framing overhead.
+        # Images reserve the full model context: conservative, never a guessed fixed vision token rate.
+        ntokens=len(json.dumps(observation,ensure_ascii=False).encode('utf-8'))+len(planner.PLANNER_PROMPT.encode())+len(planner.REPAIR_PROMPT.encode())+4096
+        if repair:ntokens+=len(body.model_dump_json().encode('utf-8'))
+        if observation['screenshot']:
+            ntokens=int(entry.get('context_length') or 0)
+            if ntokens<=0:raise ValueError()
+        amount=ntokens*inp+(2000 if visual or verify else planner.call_limits(observation,repair))*out+fee
+        if any(float(v or 0)>0 for k,v in pricing.items() if k not in ('prompt','completion','request','input_cache_read','input_cache_write','internal_reasoning')):
+            raise ValueError()
+    except (ValueError,KeyError,TypeError):
+        raise HTTPException(400,'BUDGET_EXHAUSTED: model pricing cannot be safely reserved; select a model with known token pricing.') from None
+    record={};owner_key=budget_key(who,request)
+    async def transport(messages,max_tokens):
+        return await agent.planner_complete(owner_key,messages,selected,record,max_tokens,
+            dict(run_id=body.run_id,request_id=body.request_id,question=observation['question_key'],phase='verify' if verify else 'visual' if visual else 'repair' if repair else 'plan',cap=body.spend_limit,amount=amount),price_limit={'prompt':inp*1e6,'completion':out*1e6,'request':fee,'image':0,'audio':0})
+    try:
+        if verify:
+            answer=await planner.request_verify(body,transport)
+        elif visual:
+            answer=await planner.request_visual(body,transport)
+        else:
+            answer=await planner.request(owner_key,observation,selected,record,transport,
+            failed=body.task.model_dump() if repair else None,
+            context={'task':body.task.model_dump(),'failure':body.failure,'completed_slots':body.completed_slots,'history':body.history} if repair else None)
+    except ValueError as exc:
+        return JSONResponse(status_code=400,content={'detail':str(exc),**record})
+    return {'response':answer.model_dump(),'phase':'verify' if verify else 'visual' if visual else 'repair' if repair else 'plan','reservation':amount,**record}
+
+
+@app.get('/api/agent/runs/{run_id}')
+async def planner_run_status(run_id: str, request: Request, who=Depends(owner)):
+    result=store.plan_status(budget_key(who,request),run_id)
+    if result is None:raise HTTPException(404,'Run not found.')
+    return result
+
+
+@app.post('/api/agent/visual')
+async def agent_visual(body: planner.VisualRequest, request: Request, who=Depends(owner)):
+    return await planner_endpoint(body,request,who,visual=True)
+
+
+@app.post('/api/agent/verify')
+async def agent_verify(body: planner.VerifyRequest, request: Request, who=Depends(owner)):
+    return await planner_endpoint(body,request,who,verify=True)
+
+
+@app.post('/api/agent/plan')
+async def agent_plan(body: planner.PlanRequest, request: Request, who=Depends(owner)):
+    return await planner_endpoint(body,request,who)
+
+
+@app.post('/api/agent/repair')
+async def agent_repair(body: planner.RepairRequest, request: Request, who=Depends(owner)):
+    return await planner_endpoint(body,request,who,True)
 
 
 @app.post('/api/agent/step')

@@ -1,0 +1,34 @@
+<!doctype html><meta charset="utf-8"><title>Feedback states</title>
+<style>fieldset{margin:12px 0}label{display:block;padding:4px}button{padding:8px 14px;margin-right:8px}</style>
+<h1>Question 3 of 12</h1>
+<fieldset data-question-id="q3"><legend>Which account is a liability?</legend>
+  <label><input type="radio" name="q3" id="optA" value="Cash"> Cash</label>
+  <label><input type="radio" name="q3" id="optB" value="Accounts Payable"> Accounts Payable</label>
+  <label><input type="radio" name="q3" id="optC" value="Equipment"> Equipment</label>
+</fieldset>
+<button type="button" id="check">Check</button>
+<button type="button" id="tryagain" hidden>Try again</button>
+<button type="button" id="next" hidden>Next Question</button>
+<div id="feedback" class="feedback" role="status"></div>
+<p id="attempts"></p>
+<script>
+// ?mode=locked   -> after Check: graded, inputs disabled, Next Question shown
+// ?mode=retry    -> after Check: graded incorrect, inputs stay enabled, Try again shown, 1 attempt left
+// ?mode=complete -> the whole assignment is finished
+const mode=new URLSearchParams(location.search).get('mode')||'locked';
+window.answered=[];window.advanced=0;
+if(mode==='complete'){document.body.innerHTML='<h1>Assignment complete</h1><p>You have completed this assignment. Your score: 10 / 12</p>';}
+document.getElementById('check')?.addEventListener('click',()=>{
+  const picked=document.querySelector('input[name=q3]:checked');if(!picked)return;
+  window.answered.push(picked.value);
+  const correct=picked.value==='Accounts Payable';
+  document.getElementById('feedback').textContent=correct?'Correct!':(mode==='retry'?'Incorrect. Not quite - try again.':'Incorrect. The correct answer is Accounts Payable.');
+  document.getElementById('check').hidden=true;
+  if(mode==='retry'&&!correct){document.getElementById('tryagain').hidden=false;document.getElementById('attempts').textContent='1 attempt remaining';}
+  else{for(const i of document.querySelectorAll('input'))i.disabled=true;document.getElementById('next').hidden=false;document.getElementById('attempts').textContent='0 attempts remaining';}
+});
+document.getElementById('tryagain')?.addEventListener('click',()=>{document.getElementById('feedback').textContent='';document.getElementById('tryagain').hidden=true;document.getElementById('check').hidden=false;document.getElementById('attempts').textContent='';for(const i of document.querySelectorAll('input'))i.checked=false;});
+document.getElementById('next')?.addEventListener('click',()=>{window.advanced++;document.querySelector('h1').textContent='Question 4 of 12';document.querySelector('legend').textContent='Which account is an asset?';
+  for(const i of document.querySelectorAll('input')){i.disabled=false;i.checked=false;}document.getElementById('next').hidden=true;document.getElementById('check').hidden=false;document.getElementById('feedback').textContent='';document.getElementById('attempts').textContent='';
+  document.querySelector('fieldset').setAttribute('data-question-id','q4');});
+</script>
