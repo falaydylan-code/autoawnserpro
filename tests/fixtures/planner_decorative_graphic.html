@@ -1,0 +1,17 @@
+<!doctype html><meta charset="utf-8"><title>MCQ with a decorative, non-interactive canvas</title>
+<!-- Reproduces the live Khan Academy failure: a plain multiple-choice question with an inert celebration/effect
+     canvas mounted inline in the content, pointer-events:none, unrelated to the answer. -->
+<main data-question-id="q1"><h1>Pick the correct answer</h1>
+<canvas id="confetti" width="500" height="500" style="pointer-events:none"></canvas>
+<div role="radiogroup" id="options">
+  <div role="radio" id="optA" aria-checked="false" tabindex="0">A</div>
+  <div role="radio" id="optB" aria-checked="false" tabindex="0">B</div>
+  <div role="radio" id="optC" aria-checked="false" tabindex="0">C</div>
+</div>
+</main>
+<script>
+for(const r of document.querySelectorAll('[role=radio]'))r.onclick=()=>{
+  for(const o of document.querySelectorAll('[role=radio]'))o.setAttribute('aria-checked','false');
+  r.setAttribute('aria-checked','true');
+};
+</script>

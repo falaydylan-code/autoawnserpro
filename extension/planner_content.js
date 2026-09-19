@@ -294,7 +294,11 @@
         s.representations=s.opening_control.status==='resolved'?s.opening_control.candidates.map(c=>c.target):[];
       }else if(e.matches('input:not([type=button]):not([type=submit]):not([type=reset]),textarea')&&!e.closest('td.responseCell,[role=combobox],[role=gridcell]'))add(e,'value',name(e),[],value(e));
       else if(e.matches('ol[data-sortable],[data-rbd-droppable-id]')){const items=[...e.children].filter(shown);const s=add(e,'ordering',name(e),items.map(name),items.map(name));s.items=items.map(n=>({label:name(n),target:target(n)}));}
-      else if(e.matches('svg,canvas')&&(e.matches('[data-graph],[role=graph],canvas')||e.querySelector('circle[data-point-id],circle[tabindex]'))){const g=geometry(e),s=add(e,'position',name(e)||'Graph',[],g.points||[]);s.geometry=g;}
+      // Graph markup/geometry evidence alone is not enough: a decorative icon or a celebration/effect canvas (Khan
+      // Academy mounts one inline in every exercise, pointer-events:none) can carry the same tag or a matching
+      // inner circle without being an answer control at all, and the harness then tried to visually measure it
+      // before any plan existed. An element that cannot receive pointer input can never be a real answer target.
+      else if(e.matches('svg,canvas')&&getComputedStyle(e).pointerEvents!=='none'&&(e.matches('[data-graph],[role=graph],canvas')||e.querySelector('circle[data-point-id],circle[tabindex]'))){const g=geometry(e),s=add(e,'position',name(e)||'Graph',[],g.points||[]);s.geometry=g;}
     }
     for(const [gid,es] of groups){const group=es[0].closest('fieldset,[role=radiogroup],[role=group]')||es[0];const s=add(group,gid.startsWith('radio')?'choice':'choice_set',name(group)||'Choose',es.map(name),es.filter(e=>e.checked||e.getAttribute('aria-checked')==='true').map(name));
       s.slot_key=question_key+'/'+(parts.length&&partFor(group)?partFor(group).slice(5)+'/':'')+gid;s.choices=es.map(e=>({label:name(e),target:target(e),checked:!!e.checked||e.getAttribute('aria-checked')==='true',disabled:!!e.disabled||e.getAttribute('aria-disabled')==='true'}));}

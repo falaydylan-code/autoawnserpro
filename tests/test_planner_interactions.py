@@ -5,6 +5,35 @@ from test_ordering_visual import navigate
 from test_planner_executor import BOOT
 
 
+def test_decorative_noninteractive_canvas_is_not_classified_as_a_graph(extension):
+    # Live Khan Academy failure: a plain MCQ with an inert, pointer-events:none celebration canvas
+    # mounted inline in the content. The old bare-tag match ('canvas' alone) turned it into a fake
+    # 'position' slot, which the runtime then tried to visually measure before any plan existed,
+    # dying on GUARD_REJECTED / 'An overlay blocks the exact target' at zero cost, zero model calls.
+    page,w,tid=navigate(extension,'planner_decorative_graphic.html')
+    obs=w.evaluate(BOOT,tid)
+    assert [s['kind'] for s in obs['slots']]==['choice']
+    result=w.evaluate('()=>engine.run()')
+    assert result['status']=='finished',[e.get('detail') for e in result['events']]
+    assert page.locator('#optB').get_attribute('aria-checked')=='true'
+    calls=w.evaluate('calls')
+    assert all(c['phase']!='visual' for c in calls)  # never tried to visually measure the canvas
+
+
+def test_real_overlay_still_refused_and_now_reports_what_was_hit(extension):
+    # A genuine occlusion (unlike the decorative canvas above) must still refuse the click -- and the
+    # guard's diagnostic data, captured but previously discarded at the top-level catch, now reaches
+    # the run's event log instead of leaving 'An overlay blocks the exact target' unexplained.
+    page,w,tid=navigate(extension,'planner_overlay_blocked.html')
+    w.evaluate(BOOT,tid)
+    result=w.evaluate('()=>engine.run()')
+    assert result['status']=='needs_review'
+    failure=next(e for e in result['events'] if e.get('failure_code'))
+    assert failure['failure_code']=='GUARD_REJECTED'
+    assert failure['failure_data']['hit_info']['id']=='blocker'
+    assert failure['failure_data']['target_info']['id']=='optB'
+
+
 @pytest.mark.parametrize('framed', [False, True])
 def test_mixed_sheet_dropdown_and_native_fields_one_plan(extension, framed):
     page,w,tid=navigate(extension,'spreadsheet_text.html')
