@@ -1,0 +1,20 @@
+<!doctype html><meta charset="utf-8"><title>Choice option covered by a real overlay</title>
+<!-- A genuine occlusion, unlike the decorative-canvas fixture: option B is covered by an opaque, pointer-events:auto
+     div positioned exactly over it, so the click-time hit-test at its center legitimately returns the blocker. -->
+<main data-question-id="q1"><h1>Pick the correct answer</h1>
+<div role="radiogroup" id="options" style="position:relative">
+  <div role="radio" id="optA" aria-checked="false" tabindex="0">A</div>
+  <div role="radio" id="optB" aria-checked="false" tabindex="0">B</div>
+  <div role="radio" id="optC" aria-checked="false" tabindex="0">C</div>
+</div>
+</main>
+<script>
+for(const r of document.querySelectorAll('[role=radio]'))r.onclick=()=>{
+  for(const o of document.querySelectorAll('[role=radio]'))o.setAttribute('aria-checked','false');
+  r.setAttribute('aria-checked','true');
+};
+const b=document.getElementById('optB'),r=b.getBoundingClientRect(),blocker=document.createElement('div');
+blocker.id='blocker';blocker.textContent='';
+blocker.style.cssText=`position:fixed;left:${r.x}px;top:${r.y}px;width:${r.width}px;height:${r.height}px;background:transparent;z-index:999`;
+document.body.append(blocker);
+</script>

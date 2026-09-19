@@ -199,9 +199,9 @@
           continue;
         }
         // An overlay is not evidence to scroll or to switch widget type.
-        if(route.slice(0,-1).some(step=>!step.measurement.hit))throw new Fault('GUARD_REJECTED','An overlay blocks the answer frame.');
+        if(route.slice(0,-1).some(step=>!step.measurement.hit))throw new Fault('GUARD_REJECTED','An overlay blocks the answer frame.',route.find(step=>!step.measurement.hit).measurement.hit_info);
         const ready=check.activation_only?await this.inspect(frame,target,'measure_target',check):r;
-        if(!ready.hit)throw new Fault('GUARD_REJECTED','An overlay blocks the exact target.');
+        if(!ready.hit)throw new Fault('GUARD_REJECTED','An overlay blocks the exact target.',{target_info:ready.target_info,hit_info:ready.hit_info,click_point:ready.click_point});
         if(!ready.actionable)throw new Fault('GUARD_REJECTED','Target is disabled.');
         return ready;
       }
@@ -807,7 +807,10 @@
           await this.event('ADVANCE','Moving to the next question');await this.click(next[0].frame,next[0].target,{purpose:'advance',executor_reason:'Automatic continuation is enabled and the current attempt is complete or locked.',navigation_label:next[0].label});
           const until=Date.now()+LIMITS.navigation;let changed=false;do{await sleep(150);const p=await this.observe();if(p.question_key!==obs.question_key||p.page_state==='complete'){changed=true;break}}while(Date.now()<until);if(!changed)throw new Fault('INPUT_NO_EFFECT','Next did not reach a different question.');
         }
-      }catch(e){this.ledger.status=this.cancelled||this.b.stopped()?'cancelled':'needs_review';await this.event(this.ledger.status==='cancelled'?'CANCELLED':'NEEDS_REVIEW',e.message,{failure_code:e.code||'FAILED'});}
+      }catch(e){this.ledger.status=this.cancelled||this.b.stopped()?'cancelled':'needs_review';
+        // A Fault's `actual` (e.g. what was actually hit, or which scroll container) was captured at the failure
+        // site and then silently dropped here -- the Copy log could never show what an occlusion/geometry guard saw.
+        await this.event(this.ledger.status==='cancelled'?'CANCELLED':'NEEDS_REVIEW',e.message,{failure_code:e.code||'FAILED',...(e.actual!=null?{failure_data:e.actual}:{})});}
       finally{this.busy=false;await this.persist()}
       return this.ledger;
     }
