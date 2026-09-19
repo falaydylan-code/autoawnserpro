@@ -1,0 +1,31 @@
+<!doctype html><meta charset="utf-8"><title>Cash flow option discovery</title>
+<style>td,th{border:1px solid;padding:10px;min-width:170px}table{border-collapse:collapse}ul{position:absolute;background:white;border:1px solid;padding:8px;z-index:4}li{list-style:none;padding:6px;cursor:pointer}.dropdownButton{width:26px}input[type=text]{width:120px}</style>
+<main data-question-id="cash-flow"><h1>Classify the six cash flows</h1><p>Use a word in parentheses for an outflow and without parentheses for an inflow.</p><table><tr><th>Item</th><th>Activity</th></tr></table></main>
+<script>
+const labels=['Cash paid for dividends','Cash collected from customers','Cash received when signing a note payable','Cash paid to employees','Cash paid to purchase equipment','Cash received from issuing stock'];
+window.menuOpens=[];window.answerEntries=0;
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){document.getElementById('menu')?.remove();for(const c of document.querySelectorAll('td.responseCell'))c.setAttribute('aria-expanded','false');}});
+for(let i=0;i<labels.length;i++){
+ const row=document.querySelector('table').insertRow();row.insertCell().textContent=labels[i];
+ const cell=row.insertCell();cell.id='cash'+i;cell.className='responseCell dropDownList';cell.tabIndex=0;
+ cell.setAttribute('aria-label',labels[i]);cell.setAttribute('aria-expanded','false');
+ const value=document.createElement('span');value.className='dropdownValue';cell.append(value);
+ cell.onclick=()=>{if(cell.querySelector('input'))return;
+  const editor=document.createElement('input');editor.type='text';editor.setAttribute('role','combobox');editor.setAttribute('aria-label','Type a value');cell.append(editor);editor.focus();
+  const arrow=document.createElement('input');arrow.type='button';arrow.className='dropdownButton';arrow.value='v';arrow.setAttribute('aria-controls','menu');cell.append(arrow);
+  arrow.onclick=e=>{e.stopPropagation();document.getElementById('menu')?.remove();
+   for(const c of document.querySelectorAll('td.responseCell'))c.setAttribute('aria-expanded','false');
+   setTimeout(()=>{const menu=document.createElement('ul');menu.id='menu';menu.role='listbox';menu.setAttribute('aria-labelledby',cell.id);cell.setAttribute('aria-expanded','true');
+    const r=cell.getBoundingClientRect();menu.style.top=(r.bottom+scrollY)+'px';menu.style.left=r.x+'px';
+    window.menuOpens.push(i);
+    // Different option sets per row prove we don't copy another row's choices.
+    const options=i%2?['Operating','Financing']:['(Financing)','(Investing)','Financing'];
+    if(i===3)options.push('(Operating)');
+    for(const label of options){const o=document.createElement('li');o.role='option';o.textContent=label;
+      o.onclick=()=>{value.textContent=label;cell.dataset.value=label;answerEntries++;menu.remove();cell.setAttribute('aria-expanded','false');};menu.append(o);}
+    document.body.append(menu);
+   },80);
+  };
+ };
+}
+</script>

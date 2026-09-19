@@ -1,0 +1,33 @@
+<!doctype html><meta charset="utf-8"><title>Mixed answer interactions</title>
+<style>td,th{border:1px solid;padding:8px;min-width:130px;height:28px}table{border-collapse:collapse}.jSheetInPlaceEdit{position:absolute;box-sizing:border-box;z-index:3}ul{position:absolute;background:white;border:1px solid;z-index:5}li{padding:8px;cursor:pointer}input{width:70px}</style>
+<main><h1>Complete the missing amounts and category</h1>
+<div class="jSheetParent" id="sheet"><textarea class="jSheetControls_formula" aria-hidden="true" tabindex="-1" style="position:absolute;width:6px;height:6px"></textarea>
+<table class="jSheet"><tr><th>Item</th><th>Company A</th><th>Company B</th><th>Company C</th></tr></table></div>
+<table id="other"><tr><td>Category</td><td id="category" class="responseCell dropDownList" tabindex="0" aria-label="Category"><span class="dropdownValue"></span></td></tr>
+<tr><td>Number</td><td id="contained" class="responseCell" tabindex="0" aria-label="Number"><input type="number" aria-label="Number editor"></td></tr></table>
+<label>Ordinary text <input id="ordinary"></label>
+</main><div id="jaws-div"></div>
+<script>
+window.entries=[];window.activations=[];window.editorDelay=0;
+for(let r=0;r<3;r++){
+ const row=document.querySelector('table.jSheet').insertRow();row.insertCell().textContent='Amount '+r;
+ for(let c=0;c<3;c++){
+  const cell=row.insertCell();cell.id=`value-${r}-${c}`;cell.className='response responseCell isN';cell.tabIndex=0;cell.setAttribute('aria-label',`Amount ${r}, company ${c}`);
+  cell.onclick=()=>{document.querySelectorAll('.jSheetCellActive').forEach(n=>n.classList.remove('jSheetCellActive'));cell.classList.add('jSheetCellActive');cell.focus();activations.push(cell.id)};
+  cell.ondblclick=()=>setTimeout(()=>{
+   document.querySelector('.jSheetInPlaceEdit')?.remove();const editor=document.createElement('textarea');editor.id='shared-editor';editor.className='jSheetInPlaceEdit';editor.value=cell.textContent;
+   const box=cell.getBoundingClientRect();editor.style.cssText=`left:${box.x+scrollX+2}px;top:${box.y+scrollY+2}px;width:${box.width-4}px;height:${box.height-4}px`;
+   editor.onkeydown=e=>{if(e.key==='Escape'||e.key==='Tab'){e.preventDefault();if(e.key==='Tab'){cell.textContent=editor.value;entries.push({id:cell.id,value:editor.value})}editor.remove();cell.focus()}};
+   document.getElementById('jaws-div').append(editor);editor.focus();
+  },window.editorDelay);
+ }
+}
+const category=document.getElementById('category');
+category.onclick=()=>{if(category.querySelector('input'))return;const input=document.createElement('input');input.role='combobox';category.append(input);
+ setTimeout(()=>{const arrow=document.createElement('button');arrow.className='dropdownButton';arrow.textContent='v';arrow.setAttribute('aria-controls','menu');category.append(arrow);
+ arrow.onclick=e=>{e.stopPropagation();const menu=document.createElement('ul');menu.id='menu';menu.role='listbox';menu.setAttribute('aria-labelledby',category.id);category.setAttribute('aria-expanded','true');const box=category.getBoundingClientRect();menu.style.cssText=`left:${box.x}px;top:${box.bottom}px`;
+ for(const label of ['Asset','Expense']){const option=document.createElement('li');option.role='option';option.textContent=label;option.onclick=()=>{category.querySelector('span').textContent=label;menu.remove();category.setAttribute('aria-expanded','false')};menu.append(option)}document.body.append(menu)};
+ },120);
+};
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){document.getElementById('menu')?.remove();category.setAttribute('aria-expanded','false')}});
+</script>

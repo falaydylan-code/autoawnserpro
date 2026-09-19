@@ -1,0 +1,39 @@
+<!doctype html><meta charset="utf-8"><title>Two-part question in tabs</title>
+<style>body{font:16px sans-serif;margin:20px}[role=tab]{padding:6px 12px;border:1px solid #888;background:#eee}[role=tab][aria-selected=true]{background:#fff;font-weight:bold}[role=tabpanel]{border:1px solid #888;padding:12px;max-width:520px}label{display:block;margin:6px 0}</style>
+<!-- The McGraw E1-9 shape: one question, two separately answered parts in an ARIA tab strip. Only the selected
+     panel is visible. `lazy` builds the second panel's controls on first click (courseware that renders on demand);
+     `sequential` adds a control to part 1 once its three inputs are filled (a part that only appears afterwards). -->
+<main data-question-id="e1-9">
+  <h1>E1-9 Preparing an Income Statement and Balance Sheet</h1>
+  <p><strong>Required:</strong> 1. Complete the following income statement and balance sheet for the month of January.</p>
+  <p>Complete this question by entering your answers in the tabs below.</p>
+  <div role="tablist" aria-label="Parts">
+    <button role="tab" id="tab-is" aria-selected="true" aria-controls="panel-is">Income Statement</button>
+    <button role="tab" id="tab-bs" aria-selected="false" aria-controls="panel-bs">Balance Sheet</button>
+  </div>
+  <div role="tabpanel" id="panel-is" aria-labelledby="tab-is">
+    <p>Prepare an income statement for the month of January.</p>
+    <label>Total Revenues <input id="rev"></label>
+    <label>Operating Expenses <input id="exp"></label>
+    <label>Net Income <input id="net"></label>
+  </div>
+  <div role="tabpanel" id="panel-bs" aria-labelledby="tab-bs" hidden>
+    <p>Prepare the balance sheet for the month of January.</p>
+    <div id="bs-controls"><label>Cash <input id="cash"></label><label>Total Assets <input id="assets"></label></div>
+  </div>
+  <button id="check">Check my work</button>
+</main>
+<script>
+window.lazy=false;window.sequential=false;window.tabClicks=[];
+if(new URLSearchParams(location.search).get('lazy'))window.lazy=true;
+if(new URLSearchParams(location.search).get('sequential'))window.sequential=true;
+if(new URLSearchParams(location.search).get('dupids')){for(const [from,to] of [['cash','rev'],['assets','exp']]){const e=document.getElementById(from);if(e)e.id=to}}   // Balance Sheet cells reuse Income Statement ids, like the live jSheet
+if(window.lazy){document.getElementById('bs-controls').remove()}
+for(const tab of document.querySelectorAll('[role=tab]')){
+  tab.onclick=()=>{window.tabClicks.push(tab.id);
+    for(const t of document.querySelectorAll('[role=tab]')){t.setAttribute('aria-selected',String(t===tab));document.getElementById(t.getAttribute('aria-controls')).hidden=t!==tab}
+    if(tab.id==='tab-bs'&&window.lazy&&!document.getElementById('bs-controls')){setTimeout(()=>{const d=document.createElement('div');d.id='bs-controls';d.innerHTML='<label>Cash <input id="cash"></label><label>Total Assets <input id="assets"></label>';document.getElementById('panel-bs').append(d)},150)}
+  };
+}
+document.getElementById('panel-is').addEventListener('input',()=>{if(window.sequential&&!document.getElementById('div')&&['rev','exp','net'].every(id=>document.getElementById(id).value)){const l=document.createElement('label');l.innerHTML='Dividends <input id="div">';document.getElementById('panel-is').append(l)}});
+</script>

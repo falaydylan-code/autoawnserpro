@@ -47,7 +47,35 @@ function addRow(row) {
   const text = document.createElement('span');
   text.className = row.kind === 'question' ? 'question' : row.kind;
   text.textContent = row.message;
-  li.append(time, text);
+  if (row.click_details) {
+    const box = document.createElement('details');
+    box.className = 'click-details';
+    const summary = document.createElement('summary');
+    summary.textContent = row.message;
+    const pre = document.createElement('pre');
+    pre.textContent = JSON.stringify(row.click_details, null, 2);
+    box.append(summary, pre);
+    li.append(time, box);
+  } else li.append(time, text);
+
+  if (row.opening_control) {
+    const box = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.textContent = 'Dropdown opening control: ' + row.opening_control.status;
+    const pre = document.createElement('pre');
+    pre.textContent = JSON.stringify(row.opening_control, null, 2);
+    box.append(summary, pre);
+    li.append(box);
+  }
+  if (row.scroll_details) {
+    const box = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.textContent = 'Dropdown scroll details';
+    const pre = document.createElement('pre');
+    pre.textContent = JSON.stringify(row.scroll_details, null, 2);
+    box.append(summary, pre);
+    li.append(box);
+  }
 
   if (row.detail) {
     const detail = document.createElement('span');
@@ -84,6 +112,16 @@ function addRow(row) {
     li.append(box);
   }
 
+  if (row.dom_observation) {
+    const box = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.textContent = 'DOM sent to model';
+    const pre = document.createElement('pre');
+    pre.textContent = row.dom_observation;
+    box.append(summary, pre);
+    li.append(box);
+  }
+
   $('log').append(li);
   $('log').scrollTop = $('log').scrollHeight;
 }
@@ -103,11 +141,16 @@ $('copylog').onclick = async () => {
     if (e.tokens) bits.push('  tokens: ' + e.tokens + (e.cost != null ? '  cost: $' + Number(e.cost).toFixed(5) : ''));
     if (e.working) bits.push('  thinking: ' + e.working);
     if (e.raw) bits.push('  raw: ' + e.raw);
-    for(const key of ['phase','question_key','slot_key','task_id','adapter','requested_value','actual','failure_code','document_id','observation_id','action_executed','entry_verified','save_state','grade_state','duration'])if(e[key]!=null)bits.push('  '+key+': '+JSON.stringify(e[key]));
+    if (e.dom_observation) bits.push('  DOM sent to model:\n' + e.dom_observation);
+    if (e.click_details) bits.push('  Click details:\n' + JSON.stringify(e.click_details, null, 2));
+    if (e.scroll_details) bits.push('  Scroll details:\n' + JSON.stringify(e.scroll_details, null, 2));
+    for(const key of ['slot_count','screenshot_attached','dom_log_truncated','dom_log_characters','frame_id','target','inspection_source','opening_control','menu_scroll'])if(e[key]!=null)bits.push('  '+key+': '+JSON.stringify(e[key]));
+    for(const key of ['request_id','model','requested_model','provider','reasoning_tokens','finish_reason','response_kind','output_format','format_corrections','phase','question_key','slot_key','task_id','adapter','requested_value','actual','failure_code','document_id','observation_id','action_executed','entry_verified','save_state','grade_state','duration'])if(e[key]!=null)bits.push('  '+key+': '+JSON.stringify(e[key]));
     return bits.join('\n');
   });
   const header = `Assignment Lab 2.0 log — ${new Date().toLocaleString()}\n`
     + `${$('questions').textContent} questions, ${$('steps').textContent} steps, ${$('cost').textContent}\n`
+    + `model: ${[...new Set(entries.map(e => e.model).filter(Boolean))].join(', ') || '(no model call in this log)'}\n`
     + `page: ${runPage || $('page').textContent}\n${'-'.repeat(60)}`;
   try {
     await navigator.clipboard.writeText([header, ...lines].join('\n'));
@@ -259,9 +302,11 @@ $('stop').onclick = async () => {
 $('advance').onchange = async () => {
   await chrome.storage.local.set({ advance: $('advance').checked });
 };
-for (const id of ['auto_submit', 'badges', 'double_check', 'planner_enabled', 'check_work']) {
+for (const id of ['auto_submit', 'check_work']) {
   $(id).onchange = () => chrome.storage.local.set({ [id]: $(id).checked });
 }
+// The model runs as soon as it is chosen; it must not wait for Save like the text fields do.
+$('model').onchange = async () => { await chrome.storage.local.set({ model: $('model').value.trim() }); banner($('model').value ? 'Model: ' + $('model').options[$('model').selectedIndex].text : 'Model: backend default'); };
 
 $('save').onclick = async () => {
   await chrome.storage.local.set({
@@ -282,8 +327,7 @@ chrome.runtime.onMessage.addListener((message) => {
 });
 
 (async function boot() {
-  const stored = await chrome.storage.local.get(['backend', 'model', 'note', 'armed', 'advance', 'auto_submit', 'badges', 'double_check', 'spend_limit', 'planner_enabled', 'check_work']);
-  $('planner_enabled').checked = stored.planner_enabled === true;
+  const stored = await chrome.storage.local.get(['backend', 'model', 'note', 'armed', 'advance', 'auto_submit', 'spend_limit', 'check_work']);
   $('check_work').checked = stored.check_work === true;
   $('spend_limit').value = stored.spend_limit || 2.0;
   $('backend').value = stored.backend || DEFAULT_BACKEND;
@@ -292,8 +336,6 @@ chrome.runtime.onMessage.addListener((message) => {
   armed = stored.armed === true;
   $('advance').checked = stored.advance === true;
   $('auto_submit').checked = stored.auto_submit === true;
-  $('badges').checked = stored.badges !== false;
-  $('double_check').checked = stored.double_check !== false;
   await refreshPage();
   const held = await accessGranted('<all_urls>');
   if (armed && !held) {
@@ -361,11 +403,10 @@ chrome.storage.local.get(['show-log', 'show-cost', 'advance', 'auto_submit']).th
 
 $('resume-run').onclick = async () => {
   if(!armed || !tabInfo) {banner('Arm ETH and select the original assignment tab to resume.',true);return;}
-  if(!$('planner_enabled').checked) {banner('Enable the structured planner to resume its saved run.',true);return;}
   const result=await chrome.runtime.sendMessage({type:'resume',tabId:tabInfo.id});
   if(!result?.ok)banner(result?.error||'Could not resume.',true);else showSettings(false);
 };
 
-chrome.storage.local.get(['planner_run','planner_enabled']).then(({planner_run,planner_enabled})=>{
-  if(planner_enabled&&planner_run?.status==='running'&&!running)banner('A saved run was interrupted. Open Settings and choose Resume saved planner run to re-check entered answers before continuing.');
+chrome.storage.local.get(['planner_run']).then(({planner_run})=>{
+  if(planner_run?.status==='running'&&!running)banner('A saved run was interrupted. Open Settings and choose Resume saved planner run to re-check entered answers before continuing.');
 });

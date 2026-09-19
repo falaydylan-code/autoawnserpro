@@ -1,0 +1,46 @@
+<!doctype html><meta charset="utf-8"><title>Two spreadsheet parts in tabs, rebuilt on return</title>
+<style>body{font:16px sans-serif;margin:20px}[role=tab]{padding:6px 12px;border:1px solid #888;background:#eee}[role=tab][aria-selected=true]{background:#fff;font-weight:bold}[role=tabpanel]{border:1px solid #888;padding:12px;max-width:560px}td{border:1px solid;padding:6px;min-width:120px;height:23px}table{border-collapse:collapse}.jSheetInPlaceEdit{position:absolute;box-sizing:border-box;z-index:3}</style>
+<!-- E1-9 as the live page behaves: two jSheet-like parts in an ARIA tab strip; each sheet numbers its cells
+     0_table0_cell_c1_rN (so ids repeat across tabs); and showing a tab REBUILDS its sheet's nodes. A memory of
+     "this cell has an editor" pinned to the old node is lost on return; one pinned to the slot key is not. -->
+<main data-question-id="e1-9-sheet">
+  <p><strong>Required:</strong> 1. Complete the following income statement and balance sheet. Complete this question by entering your answers in the tabs below.</p>
+  <div role="tablist"><button role="tab" id="tab-1" aria-selected="true" aria-controls="panel-1">Income Statement</button><button role="tab" id="tab-2" aria-selected="false" aria-controls="panel-2">Balance Sheet</button></div>
+  <div role="tabpanel" id="panel-1" aria-labelledby="tab-1"></div>
+  <div role="tabpanel" id="panel-2" aria-labelledby="tab-2" hidden></div>
+</main><div id="jaws-div"></div>
+<script>
+window.builds={ 'panel-1':0,'panel-2':0 };window.commits=[];window.dateline=!!new URLSearchParams(location.search).get('dateline');
+const SHEETS={'panel-1':{title:'Prepare an income statement.',rows:[['Total Revenues',3],['Operating Expenses',4],['Net Income',5]]},
+              'panel-2':{title:'Prepare the balance sheet.',rows:[['Cash',4],['Accounts Receivable',5],['Supplies',6]]}};
+const values={};   // committed values survive rebuilds, as the live sheet's do
+function build(panelId){const spec=SHEETS[panelId],panel=document.getElementById(panelId);window.builds[panelId]++;
+  panel.innerHTML=`<p>${spec.title}</p><div class="jSheetParent"><textarea class="jSheetControls_formula" aria-hidden="true" tabindex="-1" style="position:absolute;width:6px;height:6px"></textarea><table class="jSheet">`+
+    (window.dateline?`<tr><td id="0_table0_cell_c0_r2" class="styleCenter styleBold dropDownList responseCell" colspan="2" tabindex="0" style="position:relative;min-width:260px"><span class="dropdownValue">${values[panelId+'/date']||''}</span></td></tr>`:'')+
+    spec.rows.map(([label,r])=>`<tr><td>${label}</td><td id="0_table0_cell_c1_r${r}" class="response responseCell isN" tabindex="0" aria-label="${label}">${values[panelId+'/'+r]||''}</td></tr>`).join('')+`</table></div>`;
+  if(window.dateline){const dl=panel.querySelector('[id="0_table0_cell_c0_r2"]');   // ids starting with a digit are not valid #selectors
+    // Like the live jSheet date line: activating the cell creates its (hidden) menu and an unlabelled overlay arrow;
+    // the arrow shows the menu; choosing hides it. Discovery can read the hidden menu without clicking anything.
+    dl.onclick=()=>{if(dl.classList.contains('jSheetCellActive'))return;document.querySelectorAll('.jSheetCellActive').forEach(n=>n.classList.remove('jSheetCellActive'));dl.classList.add('jSheetCellActive');dl.setAttribute('aria-expanded','false');dl.focus();
+      document.getElementById('menu')?.remove();document.querySelector('.dropdownButton')?.remove();
+      const box=dl.getBoundingClientRect();const menu=document.createElement('ul');menu.id='menu';menu.setAttribute('role','listbox');menu.setAttribute('aria-labelledby',dl.id);menu.style.cssText=`display:none;position:absolute;background:white;border:1px solid;z-index:5;list-style:none;padding:0;margin:0;left:${box.x+scrollX}px;top:${box.bottom+scrollY}px;width:${box.width}px`;
+      for(const label of ['','At March 31','For the Month Ended March 31']){const li=document.createElement('li');li.setAttribute('role','option');li.style.padding='6px';li.textContent=label;li.onclick=()=>{values[panelId+'/date']=label;dl.querySelector('span').textContent=label;menu.style.display='none';dl.setAttribute('aria-expanded','false');window.commits.push({panel:panelId,id:dl.id,raw:label})};menu.append(li)}
+      document.body.append(menu);
+      const arrow=document.createElement('input');arrow.type='button';arrow.className='dropdownButton';arrow.title='Show All Items';arrow.setAttribute('aria-label','');arrow.style.cssText=`position:absolute;width:20px;height:21px;left:${box.right-22+scrollX}px;top:${box.y+1+scrollY}px`;
+      arrow.onclick=e=>{e.stopPropagation();menu.style.display='block';dl.setAttribute('aria-expanded','true')};document.body.append(arrow)}}
+  for(const cell of panel.querySelectorAll('td.responseCell.isN')){
+    cell.onclick=()=>{document.querySelectorAll('.jSheetCellActive').forEach(n=>n.classList.remove('jSheetCellActive'));cell.classList.add('jSheetCellActive');cell.focus()};
+    cell.ondblclick=()=>{document.querySelector('.jSheetInPlaceEdit')?.remove();
+      const editor=document.createElement('textarea');editor.id='jSheetInPlaceEdit_0';editor.className='jSheetInPlaceEdit';editor.value=cell.textContent.replace(/[^0-9.-]/g,'');
+      const box=cell.getBoundingClientRect();editor.style.cssText=`left:${box.x+scrollX+2}px;top:${box.y+scrollY+2}px;width:${box.width-4}px;height:${box.height-4}px`;
+      editor.onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();editor.remove();cell.focus();return}
+        if(e.key==='Tab'){e.preventDefault();const raw=editor.value;window.commits.push({panel:panelId,id:cell.id,raw});values[panelId+'/'+cell.id.split('_r')[1]]=raw?Number(raw).toLocaleString('en-US'):'';cell.textContent=values[panelId+'/'+cell.id.split('_r')[1]];editor.remove();cell.focus()}};
+      document.getElementById('jaws-div').append(editor);editor.focus();editor.setSelectionRange(editor.value.length,editor.value.length)};
+  }
+}
+build('panel-1');build('panel-2');
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){document.getElementById('menu')?.remove();document.querySelectorAll('[aria-expanded=true]').forEach(n=>n.setAttribute('aria-expanded','false'))}});
+for(const tab of document.querySelectorAll('[role=tab]')){tab.onclick=()=>{
+  for(const t of document.querySelectorAll('[role=tab]')){const p=document.getElementById(t.getAttribute('aria-controls'));t.setAttribute('aria-selected',String(t===tab));p.hidden=t!==tab;if(t===tab)build(p.id)}   // showing a tab rebuilds its sheet
+}}
+</script>

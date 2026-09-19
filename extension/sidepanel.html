@@ -53,9 +53,9 @@
   </section>
   <section id="settings-view" hidden><div class="settings-heading"><h1>Settings</h1><button id="settings-back">Done</button></div>
   <h2>Assignment behavior</h2>
-  <label class="check"><input id="planner_enabled" type="checkbox"> Structured planner (preview)</label>
-  <p class="hint">Plans the question once and verifies readable answers locally. Requires backend protocol 4. Turn off to use the previous loop. Graphs without calibrated geometry pause for review.</p>
-  <label class="check"><input id="check_work" type="checkbox"> Planner: check work once after entry</label><p class="hint">May consume a website attempt. Off by default.</p>
+
+  <p class="hint">Plans each question, enters the answers, and verifies results. Requests extra inspection only when information is missing.</p>
+  <label class="check"><input id="check_work" type="checkbox"> Check work once after entry</label><p class="hint">May consume a website attempt. Off by default.</p>
   <button id="resume-run" type="button">Resume saved planner run</button>
 
   <label class="check"><input id="advance" type="checkbox">
@@ -64,11 +64,6 @@
     confidence rating after all parts are verified. Part tabs remain usable when this is off.</p>
   <label class="check"><input id="auto_submit" type="checkbox"> Hand in when every known part is verified</label>
   <p class="hint">Off by default. Verification confirms entered values, not academic correctness.</p>
-  <label class="check"><input id="badges" type="checkbox" checked> Number controls in screenshots</label>
-  <label class="check"><input id="double_check" type="checkbox" checked> Legacy loop: confirm each answer with a screenshot too</label>
-  <p class="hint">On by default. After the page reports an answer is in, the model is shown a fresh
-    screenshot and must read the same value back before the part counts as done. Costs one extra
-    model call per answer.</p>
   <p class="hint" style="margin:6px 0 10px"><strong>Why Chrome mentions debugging.</strong> Some answer
     boxes (McGraw Hill dropdowns, drag-to-order lists) give the page no control the agent can
     press. For those it briefly uses Chrome's own mouse input, which Chrome labels
@@ -82,7 +77,14 @@
   <details id="setup">
     <summary>Setup</summary>
     <label>Backend<input id="backend" type="url" spellcheck="false"></label>
-    <label>Model<input id="model" type="text" spellcheck="false" placeholder="minimax/minimax-m3"></label>
+    <label>Model<select id="model">
+      <option value="">Backend default (MiniMax)</option>
+      <option value="minimax/minimax-m3">MiniMax M3 — cheapest</option>
+      <option value="qwen/qwen3-vl-235b-a22b-instruct">Qwen3-VL 235B</option>
+      <option value="z-ai/glm-4.6v">GLM-4.6V</option>
+      <option value="x-ai/grok-4.6">Grok 4.6 — frontier reasoning</option>
+      <option value="moonshotai/kimi-k3">Kimi K3 — most expensive</option>
+    </select></label>
     <label>Note for the agent (optional)<input id="note" type="text" maxlength="200" placeholder="e.g. answer in decimals"></label>
     <label>Stop a run after spending ($)<input id="spend_limit" type="number" min="0.10" step="0.10" placeholder="2.00"></label>
     <p class="hint">There is no limit on questions or turns; a run goes until the assignment is
@@ -94,7 +96,7 @@
 
   <p class="hint">
     The agent looks at the page each step and decides one action. It will not sign in,
-    enter passwords or payment details, accept banners, or solve captchas.
+    enter payment details, accept banners, or solve captchas.
     Hand-in requires the switch above and a completed, verified parts checklist.
   </p>
   </section>

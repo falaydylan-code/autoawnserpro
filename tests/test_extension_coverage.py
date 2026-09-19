@@ -9,7 +9,7 @@ from playwright.sync_api import sync_playwright
 ROOT=Path(__file__).resolve().parents[1]
 
 @pytest.fixture
-def extension(tmp_path):
+def extension(tmp_path, request):
     class Quiet(SimpleHTTPRequestHandler):
         def log_message(self,*args): pass
     handler=functools.partial(Quiet,directory=str(ROOT/'tests'/'fixtures'))
@@ -19,10 +19,13 @@ def extension(tmp_path):
     # Site access is optional in the shipped manifest and granted by arming ETH,
     # which needs a real click -- chrome.permissions.request refuses to run
     # without a user gesture, so a headless test cannot take it. Load a copy of
-    # the extension with that one grant already made. Every other byte is the
-    # shipped code; the arming flow itself is covered by the manual checklist.
+    # the extension with that one grant already made. Planner tests use the shipped code; legacy regression tests use
+    # the explicitly archived worker below. Arming has a manual checklist.
     import json,shutil
     ext=tmp_path/'extension';shutil.copytree(ROOT/'extension',ext)
+    # Historical regression suites explicitly use the retired worker, never shipped.
+    if not request.module.__name__.startswith('test_planner'):
+        for f in (ROOT/'tests'/'legacy_extension').glob('*.js'): shutil.copy2(f,ext/f.name)
     manifest=json.loads((ext/'manifest.json').read_text(encoding='utf-8'))
     manifest['host_permissions']=manifest.get('host_permissions',[])+manifest.pop('optional_host_permissions',[])
     (ext/'manifest.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
@@ -338,3 +341,21 @@ def test_a_plan_whose_refs_bind_to_nothing_does_not_freeze_the_snapshot(extensio
     allowed=execute(worker,tab_id,'submitAll')
     assert allowed['ok'],allowed
     assert page.evaluate('submissions')==1
+
+
+def test_legacy_gate_blocks_unplanned_graph_before_submit(extension):
+    """Finding 1: the legacy 0.8 hand-in gate no longer exempts a graph, so an
+    unplanned canvas/graph answer blocks auto submission instead of being handed
+    in blank."""
+    _, w, _, _, _ = extension
+    refusal = w.evaluate('''()=>{
+      const C=new AssignmentCoverage.Coverage();
+      const page={question_hint:'',part_tabs:[],warnings:[],elements:[
+        {ref:1,key:'k:text',role:'textbox',name:'Answer',box:{x:0,y:0,w:50,h:20}},
+        {ref:2,key:'k:graph',role:'graph',name:'Graph',box:{x:0,y:30,w:200,h:200}},
+        {ref:3,key:'k:submit',role:'button',control:'terminal',name:'Submit Assignment',box:{x:0,y:240,w:80,h:20}}]};
+      C.read({question:'Q',parts:[{id:'t',what:'the value',answer:'5',ref:1}]},page);
+      const p=C.current.parts.get('t');p.entered=true;p.verified=true;
+      return C.gate({action:'click',ref:3},page,{auto_submit:true,advance:true});
+    }''')
+    assert refusal and 'unplanned' in refusal.lower() and 'graph' in refusal.lower(), refusal

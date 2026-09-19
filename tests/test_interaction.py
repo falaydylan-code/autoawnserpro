@@ -15,7 +15,7 @@ def page():
 
 def load(page, fixture):
     page.goto((ROOT / 'tests' / 'fixtures' / fixture).as_uri())
-    page.add_script_tag(path=str(ROOT / 'extension' / 'content.js'))
+    page.add_script_tag(path=str(ROOT / 'tests' / 'legacy_extension' / 'content.js'))
     return page.evaluate('__assignmentLab.observe()')
 
 def by_id(page, id):

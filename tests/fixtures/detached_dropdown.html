@@ -1,0 +1,21 @@
+<!doctype html><meta charset="utf-8"><title>Detached expand control</title>
+<style>td{border:1px solid;padding:10px;min-width:190px}table{border-collapse:collapse}.dropdownButton{position:absolute;width:22px;height:22px}ul{position:absolute;background:white;z-index:5}li{padding:8px}</style>
+<main><h1>Classify these accounts</h1><p>Select the account type for both rows.</p><table>
+<tr><td>Equipment</td><td id="equipment" class="responseCell dropDownList" tabindex="0" aria-label="Equipment"><span class="dropdownValue"></span></td></tr>
+<tr><td>Cash</td><td id="cash" class="responseCell dropDownList" tabindex="0" aria-label="Cash"><span class="dropdownValue"></span></td></tr>
+</table></main>
+<div id="scrollPane"></div>
+<script>
+window.cellActivations=[];window.arrowClicks=[];window.editorFocus=0;let active;
+const arrow=document.createElement('input');arrow.type='button';arrow.className='dropdownButton';arrow.title='Show All Items';document.getElementById('scrollPane').append(arrow);
+const menu=document.createElement('ul');menu.id='choices';menu.role='listbox';menu.hidden=true;document.body.append(menu);
+function activate(cell){
+ active=cell;cell.role='combobox';cell.setAttribute('aria-controls','choices');cell.setAttribute('aria-expanded','false');menu.setAttribute('aria-labelledby',cell.id);menu.hidden=true;
+ if(!cell.querySelector('input')){const editor=document.createElement('input');editor.type='text';editor.role='combobox';editor.setAttribute('aria-label','Type answer');editor.onfocus=()=>editorFocus++;editor.style.width='100px';cell.append(editor);}
+ arrow.setAttribute('aria-label',cell.getAttribute('aria-label'));const r=cell.getBoundingClientRect();arrow.style.left=(r.right-24+scrollX)+'px';arrow.style.top=(r.top+2+scrollY)+'px';
+ menu.replaceChildren();for(const label of ['Asset','Liability']){const o=document.createElement('li');o.role='option';o.textContent=label;o.onclick=()=>{active.querySelector('.dropdownValue').textContent=label;menu.hidden=true;active.setAttribute('aria-expanded','false')};menu.append(o);}
+}
+for(const cell of document.querySelectorAll('td.responseCell'))cell.onclick=()=>{cellActivations.push(cell.id);activate(cell)};
+arrow.onclick=()=>{arrowClicks.push(active.id);active.setAttribute('aria-expanded','true');menu.hidden=false;const r=active.getBoundingClientRect();menu.style.left=r.x+'px';menu.style.top=(r.bottom+scrollY)+'px'};
+activate(document.getElementById('equipment'));
+</script>

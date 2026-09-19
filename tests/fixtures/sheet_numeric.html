@@ -1,0 +1,46 @@
+<!doctype html><meta charset="utf-8"><title>Numeric spreadsheet cells, like the live jSheet</title>
+<style>td,th{border:1px solid;padding:6px;min-width:120px;height:23px}table{border-collapse:collapse}.jSheetInPlaceEdit{position:absolute;box-sizing:border-box;z-index:3}</style>
+<!-- The McGraw jSheet shape that broke the 6:28 PM run: numeric ("isN") cells whose in-place editor
+     (a) swallows select-all, so a retry appended "91300" to "91300",
+     (b) reformats what was committed -- digits only, thousands commas, "$" only on styleNumber rows,
+     (c) discards the edit on Escape.
+     The recorded `commits` are the RAW editor text at commit time, so a test can prove what was typed. -->
+<main><h1>Prepare an income statement for the month of January.</h1>
+<p>Total Revenues $ 139,000 Operating Expenses 91,300</p>
+<div class="jSheetParent" id="sheet"><textarea class="jSheetControls_formula" aria-hidden="true" tabindex="-1" style="position:absolute;width:6px;height:6px"></textarea><table class="jSheet">
+<tr><td>Total Revenues</td><td id="rev" class="styleNumber response responseCell isN" tabindex="0" aria-label="Total Revenues"></td></tr>
+<tr><td>Operating Expenses</td><td id="exp" class="response responseCell isN" tabindex="0" aria-label="Operating Expenses"></td></tr>
+<tr><td>Net Income</td><td id="net" class="response responseCell isN" tabindex="0" aria-label="Net Income"></td></tr>
+<tr id="locked-row" hidden><td>Retained Earnings</td><td id="ret" class="responseCell isN" tabindex="0" aria-label="Retained Earnings"></td></tr>
+</table></div></main><div id="jaws-div"></div>
+<script>
+window.commits=[];window.mangle=false;
+const params=new URLSearchParams(location.search);window.locked=params.get('locked');   // 'forever' | 'until_revenue'
+// ?slow=<ms>: the FIRST mousedown on an answer cell is held that long in a synchronous loop, so the browser cannot
+// acknowledge the click until it ends -- a page slow to accept input (M3-9 5:11 PM: ~5 s per click).
+window.slow=Number(params.get('slow')||0);window.slowed=false;
+document.addEventListener('mousedown',()=>{if(window.slow&&!window.slowed){window.slowed=true;const end=Date.now()+window.slow;while(Date.now()<end);}},true);
+if(window.locked)document.getElementById('locked-row').hidden=false;
+// a locked cell: no `response` class, ignores double-click; 'until_revenue' unlocks once Total Revenues is committed
+const unlock=()=>{const c=document.getElementById('ret');if(c.classList.contains('response'))return;c.classList.add('response');wire(c)};
+const fmt=(raw,dollar)=>{const t=String(raw).replace(/[^0-9.-]/g,'');if(!t)return '';const n=Number(t);if(!Number.isFinite(n))return '';return (dollar?'$':'')+n.toLocaleString('en-US')};
+function wire(cell){
+  cell.onclick=()=>{document.querySelectorAll('.jSheetCellActive').forEach(n=>n.classList.remove('jSheetCellActive'));cell.classList.add('jSheetCellActive');cell.focus()};
+  cell.ondblclick=()=>{
+    document.querySelector('.jSheetInPlaceEdit')?.remove();
+    const editor=document.createElement('textarea');editor.id='jSheetInPlaceEdit_0';editor.className='jSheetInPlaceEdit';
+    editor.value=cell.textContent.replace(/[^0-9.-]/g,'');           // the editor holds digits, the cell shows the formatted amount
+    const box=cell.getBoundingClientRect();editor.style.cssText=`left:${box.x+scrollX+2}px;top:${box.y+scrollY+2}px;width:${box.width-4}px;height:${box.height-4}px`;
+    editor.onkeydown=e=>{
+      if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='a'){e.preventDefault();editor.setSelectionRange(editor.value.length,editor.value.length);return}   // (a) select-all swallowed
+      if(e.key==='Escape'){e.preventDefault();editor.remove();cell.focus();return}                                                                  // (c) cancel
+      if(e.key==='Tab'){e.preventDefault();window.commits.push({id:cell.id,raw:editor.value});cell.textContent=fmt(editor.value,cell.classList.contains('styleNumber'));editor.remove();cell.focus()}  // (b) commit + format
+    };
+    editor.oninput=()=>{if(window.mangle&&editor.value.length>2)editor.value=editor.value.slice(0,-1)};   // optional: a widget that loses the last keystroke
+    document.getElementById('jaws-div').append(editor);editor.focus();editor.setSelectionRange(editor.value.length,editor.value.length);
+  };
+}
+for(const cell of document.querySelectorAll('td.responseCell.response'))wire(cell);
+document.getElementById('ret').onclick=()=>{if(!document.getElementById('ret').classList.contains('response')){document.querySelectorAll('.jSheetCellActive').forEach(n=>n.classList.remove('jSheetCellActive'));document.getElementById('ret').classList.add('jSheetCellActive')}};
+document.addEventListener('keydown',e=>{if(e.key==='Tab'&&window.locked==='until_revenue')setTimeout(()=>{if(document.getElementById('rev').textContent)unlock()},0)});
+</script>

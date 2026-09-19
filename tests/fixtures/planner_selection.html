@@ -9,6 +9,7 @@ li[aria-disabled=true]{color:#999;cursor:not-allowed}
 <main data-question-id="selection-fixture"><h1>Classify Accounts Payable</h1>
 <table><tr><th>Account</th><th>Account Type</th></tr></table></main>
 <script>
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){document.querySelector('ul')?.remove();document.querySelector('#cell')?.setAttribute('aria-expanded','false')}});
 function openMenu(cell){
  document.querySelector('ul')?.remove();
  const menu=document.createElement('ul');menu.role='listbox';menu.id='menu_'+cell.id;menu.setAttribute('aria-labelledby',cell.id);

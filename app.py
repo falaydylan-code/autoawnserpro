@@ -47,6 +47,7 @@ async def cleanup():
 @asynccontextmanager
 async def lifespan(app):
     store.recover()
+    store.reconcile_stale_plans()   # pending reservations no call can still own are charged at their worst case, never left frozen
     task = asyncio.create_task(cleanup())
     yield
     task.cancel()
@@ -79,7 +80,8 @@ async def unexpected(request, exc):
 
 
 def owner(authorization: str = Header(default='')):
-    value = tokens.get(authorization.removeprefix('Bearer '))
+    token=authorization.removeprefix('Bearer ')
+    value = tokens.get(token) or store.read_access(token)
     if not value or value[1] < time.time():
         raise HTTPException(401, 'Sign in with your invite code to continue.')
     return value[0]
@@ -115,6 +117,7 @@ def budget_key(who, request):
 def issue_token(identity):
     token = secrets.token_urlsafe(32)
     tokens[token] = (identity, time.time() + 8 * 3600)
+    store.save_access(token,*tokens[token])
     return token
 
 
@@ -126,7 +129,11 @@ async def guest(request: Request):
         raise HTTPException(403, 'Public access is turned off. Use your private access link.')
     throttle(request, 'guest', per_ip=10, per_global=200, window=300,
              message='Too many new visitors from your network. Wait a few minutes.')
-    return {'token': issue_token('guest:' + secrets.token_hex(8))}
+    old=request.headers.get('authorization','').removeprefix('Bearer ')
+    previous=tokens.get(old) or store.read_access(old)
+    # A bearer can renew its own identity for 24h after expiry. No caller-chosen ID.
+    identity=previous[0] if previous and previous[1]+86400>time.time() else 'guest:' + secrets.token_hex(8)
+    return {'token': issue_token(identity)}
 
 
 @app.post('/api/login')
@@ -158,13 +165,19 @@ async def setup(who=Depends(owner)):
 
 @app.get('/api/models')
 async def models(who=Depends(owner)):
+    # The selectable models. An exact-id allowlist (not a substring match), so
+    # the user can only pick a vetted, vision-capable model. Configurable via
+    # ALLOWED_MODELS; default is MiniMax plus the two stronger Chinese
+    # open-weight vision models. Every id here must support image input.
+    allowed = {x.strip() for x in setting('ALLOWED_MODELS',
+        'minimax/minimax-m3,qwen/qwen3-vl-235b-a22b-instruct,z-ai/glm-4.6v,x-ai/grok-4.6,moonshotai/kimi-k3').split(',') if x.strip()}
     try:
         async with httpx.AsyncClient(timeout=20) as client:
             result = await client.get('https://openrouter.ai/api/v1/models')
             result.raise_for_status()
             models = result.json()['data']
         return [{'id': m['id'], 'vision': 'image' in m.get('architecture', {}).get('input_modalities', []),
-                 'pricing': m.get('pricing', {}), 'context_length': m.get('context_length',0)} for m in models if 'minimax' in m['id'].lower()]
+                 'pricing': m.get('pricing', {}), 'context_length': m.get('context_length',0), 'supported_parameters':m.get('supported_parameters',[]), 'reasoning': m.get('reasoning') or {}} for m in models if m['id'] in allowed]
     except Exception:
         raise HTTPException(502, 'Could not load the live OpenRouter model list. Check internet access and retry.') from None
 
@@ -242,7 +255,7 @@ async def create(body: Create, request: Request, who=Depends(owner)):
         registry = await models(who)
         selected = body.model or setting('OPENROUTER_MODEL')
         if not any(m['id'] == selected and m['vision'] for m in registry):
-            raise HTTPException(400, 'Select a MiniMax model with image input from the live model list.')
+            raise HTTPException(400, 'Select an allowed model with image input from the model list.')
         body.model = selected
     if body.mode == 'live':
         try:
@@ -433,10 +446,10 @@ async def capabilities(protocol: int = 3):
     # falls back to the protocol-3 default rather than 422-ing the negotiation,
     # so the planner's `?protocol=4` request actually returns protocol 4.
     protocol = protocol if protocol in (3, 4) else 3
-    return {'protocol': protocol, 'extension': '0.9.4', 'supported_protocols': [3,4],
-            'planner_release': 'preview',
+    return {'protocol': protocol, 'extension': '0.10.35', 'supported_protocols': [3,4], 'request_wait_seconds': planner.REQUEST_DEADLINE_MAX,
+            'planner_release': 'preview', 'planner_output_tokens': planner.call_limits({}),
             'features': ['parts', 'ordering', 'visual_input', 'visual_verification', 'browser_input', 'page_states', 'no_step_ceiling',
-                         'task_plans', 'scoped_observations', 'stable_slots', 'typed_verification', 'bounded_repair', 'geometry_inspection']}
+                         'task_plans', 'scoped_observations', 'stable_slots', 'typed_verification', 'bounded_repair', 'geometry_inspection', 'frame_scoped_inspection','interaction_classification']}
 
 
 async def planner_endpoint(body, request, who, repair=False, visual=False, verify=False):
@@ -452,9 +465,6 @@ async def planner_endpoint(body, request, who, repair=False, visual=False, verif
     observation=body.observation.model_dump()
     pricing=entry.get('pricing') or {}
     try:
-        inp,out,fee=(float(pricing[k]) for k in ('prompt','completion','request')) if 'request' in pricing else (float(pricing['prompt']),float(pricing['completion']),0)
-        inp=max(inp,float(pricing.get('input_cache_write') or 0),float(pricing.get('input_cache_read') or 0));out=max(out,float(pricing.get('internal_reasoning') or 0))
-        if any(not math.isfinite(x) or x<0 for x in (inp,out,fee)):raise ValueError()
         # UTF-8 bytes upper-bound text token count; allow chat framing overhead.
         # Images reserve the full model context: conservative, never a guessed fixed vision token rate.
         ntokens=len(json.dumps(observation,ensure_ascii=False).encode('utf-8'))+len(planner.PLANNER_PROMPT.encode())+len(planner.REPAIR_PROMPT.encode())+4096
@@ -462,15 +472,23 @@ async def planner_endpoint(body, request, who, repair=False, visual=False, verif
         if observation['screenshot']:
             ntokens=int(entry.get('context_length') or 0)
             if ntokens<=0:raise ValueError()
-        amount=ntokens*inp+(2000 if visual or verify else planner.call_limits(observation,repair))*out+fee
-        if any(float(v or 0)>0 for k,v in pricing.items() if k not in ('prompt','completion','request','input_cache_read','input_cache_write','internal_reasoning')):
-            raise ValueError()
+        budget=planner.reasoning_budget(observation)
+        reasoning=None if body.reasoning_mode=='off' else planner.reasoning_request(entry,setting('PLANNER_REASONING','medium'),budget);thinking=budget if reasoning else 0
+        # Long-prompt tiers (`overrides`, e.g. Grok 4.6 doubles above 200k prompt tokens) apply when the reserved bound
+        # crosses the tier; the image bound (full context) usually does, so the tier price is what gets reserved.
+        inp,out,fee=planner.reservation_prices(pricing,ntokens)
+        amount=ntokens*inp+((2000 if visual or verify else planner.call_limits(observation,repair))+thinking)*out+fee
+        unknown=planner.unknown_charges(pricing)
+        if unknown:raise HTTPException(400,f'BUDGET_EXHAUSTED: model pricing has a component this backend cannot reserve ({", ".join(unknown)}); select another model.')
     except (ValueError,KeyError,TypeError):
         raise HTTPException(400,'BUDGET_EXHAUSTED: model pricing cannot be safely reserved; select a model with known token pricing.') from None
-    record={};owner_key=budget_key(who,request)
+    record={};owner_key=who
+    output_format=None if planner.thinking_replaces_schema(entry,reasoning) else planner.response_format(entry.get('supported_parameters',[]),planner.VerifyResponse if verify else planner.VisualGraph if visual else planner.PlannerResponse,observation)
+    if output_format and not observation['screenshot']:amount+=len(json.dumps(output_format).encode('utf-8'))*inp
+    record['output_format']=output_format['type'] if output_format else 'prompt_json';record['reasoning']=reasoning
     async def transport(messages,max_tokens):
-        return await agent.planner_complete(owner_key,messages,selected,record,max_tokens,
-            dict(run_id=body.run_id,request_id=body.request_id,question=observation['question_key'],phase='verify' if verify else 'visual' if visual else 'repair' if repair else 'plan',cap=body.spend_limit,amount=amount),price_limit={'prompt':inp*1e6,'completion':out*1e6,'request':fee,'image':0,'audio':0})
+        return await agent.planner_complete(owner_key,messages,selected,record,max_tokens+thinking,
+            dict(run_id=body.run_id,request_id=body.request_id,question=observation['question_key'],phase='verify' if verify else 'visual' if visual else 'inspection_correction' if body.inspection_target_correction else 'repair' if repair else 'plan',cap=body.spend_limit,amount=amount,budget_owner=budget_key(who,request)),price_limit={'prompt':inp*1e6,'completion':out*1e6,'request':fee,'image':0,'audio':0},output_format=output_format,reasoning=reasoning,avoid_providers=body.avoid_providers,deadline=planner.request_deadline(max_tokens+thinking))
     try:
         if verify:
             answer=await planner.request_verify(body,transport)
@@ -481,13 +499,14 @@ async def planner_endpoint(body, request, who, repair=False, visual=False, verif
             failed=body.task.model_dump() if repair else None,
             context={'task':body.task.model_dump(),'failure':body.failure,'completed_slots':body.completed_slots,'history':body.history} if repair else None)
     except ValueError as exc:
-        return JSONResponse(status_code=400,content={'detail':str(exc),**record})
+        correction={'inspection_correction':exc.correction} if isinstance(exc,planner.InspectionTargetError) else {}
+        return JSONResponse(status_code=400,content={'detail':str(exc),**record,**correction})
     return {'response':answer.model_dump(),'phase':'verify' if verify else 'visual' if visual else 'repair' if repair else 'plan','reservation':amount,**record}
 
 
 @app.get('/api/agent/runs/{run_id}')
 async def planner_run_status(run_id: str, request: Request, who=Depends(owner)):
-    result=store.plan_status(budget_key(who,request),run_id)
+    result=store.plan_status(who,run_id)
     if result is None:raise HTTPException(404,'Run not found.')
     return result
 

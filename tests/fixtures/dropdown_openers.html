@@ -1,0 +1,41 @@
+<!doctype html><meta charset="utf-8"><title>Dropdown cells that open different ways</title>
+<style>body{font:16px sans-serif;margin:20px}td{border:1px solid;padding:6px;min-width:150px;height:23px;position:relative}table{border-collapse:collapse}ul{position:absolute;background:white;border:1px solid;z-index:5;list-style:none;padding:0;margin:0}li{padding:8px;cursor:pointer}.dropdownButton{position:absolute;width:20px;height:21px}</style>
+<!-- One UNLABELLED dropdown cell (a statement's title-row date line has no row or column label), opened one of
+     four ways chosen by ?mode=:
+       overlay  -- a detached arrow button with an empty aria-label is laid over the cell's right edge (the McGraw
+                   M3-2 shape): label evidence is impossible, geometry is the only clue
+       click    -- no arrow; the active cell is a combobox that opens when clicked again
+       keyboard -- no arrow; the active cell is a combobox that opens on ArrowDown only
+       stray    -- like overlay, but the arrow sits OUTSIDE the cell's box: it must never be clicked, and the run
+                   must stop naming what it tried
+     `clicks` records every arrow click so a test can prove the stray one was left alone. -->
+<main data-question-id="openers">
+  <h1>Prepare the statement.</h1>
+  <table class="statement"><tr><td>MOSTERT MUSIC COMPANY</td></tr><tr><td>Income Statement</td></tr>
+  <tr><td id="date_line" class="styleCenter styleBold dropDownList responseCell" tabindex="0"><span class="dropdownValue"></span></td></tr>
+  <tr><td>Revenues</td></tr></table>
+</main>
+<script>
+const mode=new URLSearchParams(location.search).get('mode')||'overlay';window.clicks=[];window.opens=0;
+// ?slow=<ms>: the first mousedown is held that long synchronously (a page slow to accept input); see sheet_numeric.html.
+window.slow=Number(new URLSearchParams(location.search).get('slow')||0);window.slowed=false;
+document.addEventListener('mousedown',()=>{if(window.slow&&!window.slowed){window.slowed=true;const end=Date.now()+window.slow;while(Date.now()<end);}},true);
+const cell=document.getElementById('date_line');let arrow=null;
+// ?prefill=<label>: the cell starts with that choice shown (a previous wrong answer that a plan may blank out).
+const prefill=new URLSearchParams(location.search).get('prefill');if(prefill)cell.querySelector('span').textContent=prefill;
+function openMenu(){window.opens++;document.getElementById('menu')?.remove();const menu=document.createElement('ul');menu.id='menu';menu.setAttribute('role','listbox');menu.setAttribute('aria-labelledby','date_line');
+  const box=cell.getBoundingClientRect();menu.style.cssText=`left:${box.x+scrollX}px;top:${box.bottom+scrollY}px;width:${box.width}px`;cell.setAttribute('aria-expanded','true');
+  for(const label of ['','At March 31','For the Month Ended March 31']){const li=document.createElement('li');li.setAttribute('role','option');li.textContent=label;li.onclick=()=>{cell.querySelector('span').textContent=label;menu.remove();cell.setAttribute('aria-expanded','false')};menu.append(li)}
+  document.body.append(menu)}
+cell.onclick=()=>{
+  if(cell.classList.contains('jSheetCellActive'))return;
+  cell.classList.add('jSheetCellActive');cell.setAttribute('aria-expanded','false');cell.focus();
+  if(mode==='click'){const combo=document.createElement('span');combo.setAttribute('role','combobox');combo.className='combo';combo.style.cssText='position:absolute;right:4px;top:4px;width:16px;height:16px;border:1px solid #888;background:#ddd';combo.onclick=e=>{e.stopPropagation();openMenu()};cell.append(combo)}   // click mode: only the field's own combobox opens it
+  else cell.setAttribute('role','combobox');
+  if(mode==='overlay'||mode==='stray'){setTimeout(()=>{arrow=document.createElement('input');arrow.type='button';arrow.className='dropdownButton';arrow.setAttribute('aria-label','');arrow.title='';
+    const box=cell.getBoundingClientRect();arrow.style.left=(mode==='overlay'?box.right-22:box.right+40)+scrollX+'px';arrow.style.top=(box.y+1+scrollY)+'px';
+    arrow.onclick=e=>{e.stopPropagation();window.clicks.push('arrow');openMenu()};document.body.append(arrow)},100)}
+};
+cell.onkeydown=e=>{if(mode==='keyboard'&&e.key==='ArrowDown'&&cell.classList.contains('jSheetCellActive')){e.preventDefault();openMenu()}};
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){document.getElementById('menu')?.remove();cell.setAttribute('aria-expanded','false')}});   // the live menu closes on Escape too
+</script>

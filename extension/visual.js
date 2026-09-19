@@ -17,6 +17,23 @@
   const keysHeld = new Set();
   const pause = ms => new Promise(r => setTimeout(r, ms));
 
+  // Display-only pointer, independent of observation and browser input.
+  async function cursor(id, action, pt, pressed=false) {
+    try { await chrome.scripting.executeScript({target:{tabId:id},func:(action,pt,pressed)=>{
+      let el=document.getElementById('__assignment_lab_cursor');
+      // The text caret blinks; two captures of an unchanged page must still hash equal, so it is hidden with the
+      // pointer and put back afterwards (also on remove, so a detach never leaves the student without a caret).
+      const de=document.documentElement,caret=show=>{if(show){if(de.hasAttribute('data-assignment-lab-caret')){de.style.caretColor=de.getAttribute('data-assignment-lab-caret');de.removeAttribute('data-assignment-lab-caret')}}
+        else if(!de.hasAttribute('data-assignment-lab-caret')){de.setAttribute('data-assignment-lab-caret',de.style.caretColor||'');de.style.caretColor='transparent'}};
+      if(action==='remove'){el?.remove();caret(true);return;}
+      if(action==='hide'){if(el)el.style.visibility='hidden';caret(false);return;}
+      if(action==='restore'){if(el)el.style.visibility='visible';caret(true);return;}
+      if(!el){el=document.createElement('div');el.id='__assignment_lab_cursor';el.setAttribute('aria-hidden','true');
+        el.style.cssText='position:fixed;pointer-events:none!important;z-index:2147483647;width:20px;height:20px;border:3px solid white;border-radius:50%;box-shadow:0 0 0 2px #15803d;transform:translate(-50%,-50%);';document.documentElement.appendChild(el);}
+      el.style.left=pt.x+'px';el.style.top=pt.y+'px';el.style.background=pressed?'#15803d':'#4ade80';el.style.visibility='visible';
+    },args:[action,pt||null,pressed]}); }catch{/* Tab closure/navigation must not delay Stop or input cleanup. */}
+  }
+
   const KEYS = {
     Enter: {code: 'Enter', vk: 13, text: '\r'}, Tab: {code: 'Tab', vk: 9}, Space: {code: 'Space', vk: 32, text: ' '},
     Escape: {code: 'Escape', vk: 27}, Backspace: {code: 'Backspace', vk: 8}, Delete: {code: 'Delete', vk: 46},
@@ -53,10 +70,10 @@
   async function detach() {
     cancelled = true;
     const id = attached; attached = null;
-    if (id != null) { await releaseAll(id); try { await chrome.debugger.detach({tabId: id}); } catch {} }
+    if (id != null) { await releaseAll(id); await cursor(id,'remove'); try { await chrome.debugger.detach({tabId: id}); } catch {} }
     gestureStart = null;
   }
-  chrome.debugger.onDetach.addListener(({tabId}) => { if (tabId === attached) { attached = null; cancelled = true; buttonHeld = false; keysHeld.clear(); } });
+  chrome.debugger.onDetach.addListener(({tabId}) => { if (tabId === attached) { attached = null; cancelled = true; buttonHeld = false; keysHeld.clear(); cursor(tabId,'remove'); } });
   chrome.tabs.onUpdated.addListener((tabId, change) => { if (tabId === attached && (change.url || change.status === 'loading')) cancelled = true; });
   chrome.tabs.onRemoved.addListener(tabId => { if (tabId === attached) { attached = null; cancelled = true; } });
 
@@ -78,6 +95,10 @@
   async function mouse(id, type, pt, extra, stopped) {
     await guard(id, stopped);
     await cdp(id, 'Input.dispatchMouseEvent', {type, x: pt.x, y: pt.y, button: 'left', clickCount: 1, ...extra});
+    if(attached===id&&!cancelled&&!stopped?.()) {
+      await cursor(id,'move',pt,type==='mousePressed'||!!extra?.buttons);
+      if(attached!==id||cancelled||stopped?.())await cursor(id,'remove');
+    }
   }
 
   async function move(id, pt, stopped) { await begin(id, stopped); await mouse(id, 'mouseMoved', pt, {button: 'none', clickCount: 0}, stopped); return {ok: true, detail: 'Pointer moved.'}; }
@@ -168,7 +189,10 @@
   async function screenshot(id) {
     await attach(id);
     if (cancelled) { cancelled = false; }
-    const shot = await cdp(id, 'Page.captureScreenshot', {format: 'png', fromSurface: true, captureBeyondViewport: false});
+    await cursor(id,'hide');
+    let shot;
+    try {shot = await cdp(id, 'Page.captureScreenshot', {format: 'png', fromSurface: true, captureBeyondViewport: false});}
+    finally {if(attached===id&&!cancelled)await cursor(id,'restore');}
     const metrics = await cdp(id, 'Page.getLayoutMetrics');
     const v = metrics.cssVisualViewport || metrics.visualViewport;
     return {dataUrl: 'data:image/png;base64,' + shot.data, viewport: {width: Math.round(v.clientWidth), height: Math.round(v.clientHeight), scrollX: Math.round(v.pageX), scrollY: Math.round(v.pageY), scale: v.scale || 1}};
@@ -200,17 +224,33 @@
   // gated typed-task path.
   const FORBIDDEN_SCRIPT = /\b(?:fetch|XMLHttpRequest|WebSocket|EventSource|sendBeacon|importScripts|localStorage|sessionStorage|indexedDB|openDatabase|postMessage|Notification)\b|document\s*\.\s*cookie|\bimport\s*\(|\beval\s*\(|\bFunction\s*\(|\.\s*(?:submit|requestSubmit|click)\s*\(|\.\s*(?:innerHTML|outerHTML|value|checked|selected|textContent|src|action)\s*=|\.\s*(?:setAttribute|removeAttribute|append|appendChild|prepend|before|after|replaceWith|replaceChild|removeChild|remove|insertAdjacentHTML|insertAdjacentElement|insertBefore|setRangeText|execCommand|dispatchEvent|focus|blur|scrollIntoView)\s*\(|\blocation\s*=|location\s*\.\s*(?:href|assign|replace|reload)|\.\s*href\s*=|window\s*\.\s*open\s*\(/i;
 
-  async function evaluate(id, expression, {timeout = 2000, cap = 16384} = {}) {
+  async function evaluate(id, expression, {timeout = 2000, cap = 16384, frame = null, bindings = {}, stopped = () => false} = {}) {
     if (FORBIDDEN_SCRIPT.test(String(expression)))
       return {ok: false, detail: 'Refused: an extraction script must be read-only. It may not use network, storage, navigation, submission, event dispatch, or DOM-mutation APIs; return values you read with querySelector/getAttribute/getBoundingClientRect/innerText instead.'};
+    if(stopped())return {ok:false,detail:'CANCELLED: Inspection stopped.'};
     await attach(id);
-    if (cancelled) cancelled = false;
+    await guard(id,stopped);
     let r;
     try {
+      let contextId;
+      if(frame){
+        const documents=await chrome.scripting.executeScript({target:{tabId:id,frameIds:[frame.frame_id]},func:()=>location.href});
+        if(documents[0]?.documentId!==frame.browser_document)throw new Error('TARGET_STALE: Inspection document changed.');
+        const tree=await cdp(id,'Page.getFrameTree'),frames=[];
+        const walk=n=>{frames.push(n.frame);for(const c of n.childFrames||[])walk(c)};walk(tree.frameTree);
+        const matches=frame.frame_id===0?[tree.frameTree.frame]:frames.filter(f=>f.parentId&&f.url+(f.urlFragment||'')===frame.url);
+        if(matches.length!==1)throw new Error('FRAME_UNREADABLE: Cannot uniquely resolve inspection frame.');
+        contextId=(await cdp(id,'Page.createIsolatedWorld',{frameId:matches[0].id,worldName:'assignment-lab-inspection'})).executionContextId;
+      }
+      const helper=`const __bindings=${JSON.stringify(bindings)};const resolveSlot=(key)=>{const b=__bindings[key];if(!b)throw new Error('Unknown slot for this frame; use an offered slot_key.');let n=document;for(const step of b.path)n=step==='shadow'?n?.shadowRoot:n?.children?.[step];if(!n||n.tagName!==b.tag||(b.id&&n.id!==b.id))throw new Error('TARGET_STALE: Slot element changed.');return n;};`;
+      await guard(id,stopped);
       r = await cdp(id, 'Runtime.evaluate', {
-        expression: '(function(){' + String(expression) + '\n})()',
+        expression: '(function(){' + helper + String(expression) + '\n})()',
+        ...(contextId?{contextId}:{}),
         returnByValue: true, awaitPromise: true, timeout, allowUnsafeEvalBlockedByCSP: true,
       });
+      await guard(id,stopped);
+      if(frame){const documents=await chrome.scripting.executeScript({target:{tabId:id,frameIds:[frame.frame_id]},func:()=>location.href});if(documents[0]?.documentId!==frame.browser_document)throw new Error('TARGET_STALE: Discarded inspection after document replacement.');}
     } catch (e) { return {ok: false, detail: 'Script could not run: ' + (e.message || e)}; }
     if (r.exceptionDetails) return {ok: false, detail: 'Script error: ' + String(r.exceptionDetails.exception?.description || r.exceptionDetails.text || 'threw').slice(0, 300)};
     let value = r.result?.value;

@@ -1,0 +1,18 @@
+<!doctype html><meta charset="utf-8"><title>Scrollable cash flow menu</title>
+<style>td{border:1px solid;padding:6px;min-width:210px}table{border-collapse:collapse}.dropdownButton{position:absolute;width:20px;height:20px}ul{position:absolute;max-height:112px;overflow-y:auto;background:white;z-index:3;margin:0;padding:0;width:200px}li{box-sizing:border-box;height:28px;padding:4px;list-style:none;cursor:pointer}</style>
+<main><h1>Classify cash flows</h1><p>Use parentheses for outflows.</p><table></table></main>
+<script>
+window.entries=[];window.menuOpens=[];const labels=['Dividends','Customers','Note payable','Employees','Equipment','Stock'];
+const choices=['','(Financing)','(Investing)','(Operating)','Financing','Investing','Operating'];
+const arrow=document.createElement('input');arrow.type='button';arrow.className='dropdownButton';arrow.title='Show All Items';document.body.append(arrow);
+const menu=document.createElement('ul');menu.role='listbox';menu.id='menu';document.body.append(menu);let active;
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){menu.hidden=true;active?.setAttribute('aria-expanded','false')}});
+function activate(cell){active=cell;for(const c of document.querySelectorAll('td.responseCell'))c.setAttribute('aria-expanded','false');cell.role='combobox';cell.setAttribute('aria-controls','menu');menu.setAttribute('aria-labelledby',cell.id);menu.hidden=true;
+ arrow.setAttribute('aria-label',cell.getAttribute('aria-label'));const r=cell.getBoundingClientRect();arrow.style.left=(r.right-22)+'px';arrow.style.top=(r.top+2)+'px';
+ menu.replaceChildren();for(const label of choices){const o=document.createElement('li');o.role='option';o.textContent=label;o.onclick=()=>{entries.push({row:active.id,value:label});active.querySelector('span').textContent=label;menu.hidden=true;active.setAttribute('aria-expanded','false')};menu.append(o);}
+}
+function openMenu(){active.setAttribute('aria-expanded','true');menu.hidden=false;const r=active.getBoundingClientRect();menu.style.left=r.x+'px';menu.style.top=(r.bottom+2)+'px';menu.scrollTop=0;menuOpens.push(active.id)}
+arrow.onclick=openMenu;
+for(const [i,label] of labels.entries()){const row=document.querySelector('table').insertRow();row.insertCell().textContent=label;const cell=row.insertCell();cell.id='row'+i;cell.className='responseCell dropDownList';cell.tabIndex=0;cell.setAttribute('aria-label',label);cell.append(document.createElement('span'));cell.onclick=()=>activate(cell);}
+document.querySelector('#row0 span').textContent='(Financing)';activate(document.getElementById('row1'));openMenu();
+</script>

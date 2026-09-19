@@ -7,6 +7,7 @@
 // the cell is the answer field; a separate arrow button also opens it; the
 // menu is appended to <body>, OUTSIDE the table, and names its owner.
 const names=['Accounts Payable','Common Stock','Equipment','Accounts Receivable','Notes Payable','Cash','Retained Earnings','Office Expense','Sales Revenue','Supplies'];
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){document.querySelector('ul')?.remove();for(const c of document.querySelectorAll('td.responseCell'))c.setAttribute('aria-expanded','false')}});
 function openMenu(cell,j){
  document.querySelector('ul')?.remove();
  for(const c of document.querySelectorAll('td.responseCell'))c.setAttribute('aria-expanded','false');

@@ -1,3 +1,5 @@
+> **0.10.0 update (2026-09-15):** The structured planner is now the only extension workflow, by user request. There is no workflow toggle or legacy rollback in the installed extension. Model-authored JavaScript inspection remains on-demand for missing information. Earlier preview/rollback instructions below are historical. Live platform validation remains a separate gate.
+
 ﻿# Structured planner rollout (0.9.0 preview)
 
 ## What changed
