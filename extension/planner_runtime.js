@@ -165,7 +165,13 @@
         // Reveal enclosing frames from the outer page inward. An iframe is a
         // boundary to inspect, not an answer to click. Clamp to its viewport
         // when the actual target first needs scrolling within the child page.
-        const route=[{frame,target,measurement:r,check}];let child=frame,point=r.click_point;
+        // What an outer layer must show is the SCROLL AREA that has to move,
+        // never the target itself: an option far down a long list renders
+        // below the page fold while its list is in view, and chasing the option
+        // dragged the open list under the fixed header (M3-9, 12:22 PM).
+        const mover=m=>m.scroll?.clipped?m.scroll.containers.find(c=>c.clipped&&c.scrollable&&(c.delta.x||c.delta.y)&&c.viewport?.w>2&&c.viewport?.h>2)||null:null;
+        const reveal=m=>{const c=mover(m);return c?.wheel_hit&&c.wheel_point?c.wheel_point:null};
+        const route=[{frame,target,measurement:r,check}];let child=frame,point=reveal(r)||r.click_point;
         const seen=new Set();
         while(child.frame_id!==0){
           if(seen.has(child.frame_id))throw new Fault('FRAME_UNREADABLE','Frame ancestry is cyclic.');seen.add(child.frame_id);
@@ -174,14 +180,18 @@
           const {parent,box}=owners[0];
           point={x:box.x+Math.max(2,Math.min(box.w-2,point.x)),y:box.y+Math.max(2,Math.min(box.h-2,point.y))};
           const measured=await this.inspect(parent,box.target,'measure_target',{point});
-          route.unshift({frame:parent,target:box.target,measurement:measured,check:{point}});child=parent;
+          route.unshift({frame:parent,target:box.target,measurement:measured,check:{point}});child=parent;point=reveal(measured)||point;
         }
         const blocked=route.find(step=>step.measurement.scroll?.clipped);
         if(blocked){
           const m=blocked.measurement;
-          const c=m.scroll.containers.find(c=>c.clipped&&c.scrollable&&(c.delta.x||c.delta.y)&&c.viewport?.w>2&&c.viewport?.h>2);
+          const c=mover(m);
           if(!c)throw new Fault('TARGET_MISSING','Target is clipped; no visible scroll area can reveal it.',m.scroll);
           if(!c.wheel_hit||!c.wheel_point)throw new Fault('GUARD_REJECTED','No unobstructed wheel position in the required scroll area.',c);
+          // A wheel lands on whatever the top page shows at that point. Every
+          // frame outside the mover must show the answer frame there, or the
+          // wheel goes to a header or overlay and nothing moves.
+          if(route.slice(0,route.indexOf(blocked)).some(step=>!step.measurement.hit))throw new Fault('GUARD_REJECTED','An outer layer covers the scroll area that must move; no wheel was sent.',{container:c.id,frame_id:blocked.frame.frame_id});
           const v=await this.b.viewport(this.tabId),point={x:c.viewport.x+c.wheel_point.x-c.local.x,y:c.viewport.y+c.wheel_point.y-c.local.y};
           if(point.x<0||point.y<0||point.x>=v.width||point.y>=v.height)throw new Fault('TARGET_MISSING','Required scroll area is outside the browser viewport.');
           const dx=Math.max(-600,Math.min(600,c.delta.x)),dy=Math.max(-600,Math.min(600,c.delta.y));
