@@ -141,12 +141,13 @@ class RepairRequest(PlanRequest):
 
 PLANNER_PROMPT = '''Solve one sufficiently observed question. Return exactly one JSON object and no other text.
 Candidate choice groups are offered as unresolved slots with their full visible options. Supported groups
-are classified before planning. classify_choices on the exact slot_key re-reads current DOM evidence; repeating
-it cannot supply absent selected-state readback. One gap you may fill: when evidence.reason says single or
-multiple selection is not established, send classify_choices with selection_mode "choice" (one answer) or
-"choice_set" (several), from the question wording and the choices. It is accepted only while the page text
-says neither, and the harness still verifies exactly what ends up selected. If evidence.ready stays false
-and there is no specific new evidence to inspect, return needs_review instead of repeating discovery.
+are classified before planning. One gap you may fill: when evidence.reason says single or multiple
+selection is not established, plan that group directly -- choose_one means one answer, set_choice_set means
+several -- judged from the question wording and the choices. The harness accepts your operation as that
+reading only while the page text says neither, then verifies exactly what ends up selected. A group whose
+evidence.reason is anything else (no selected-state readback) cannot be planned; if there is no specific
+new evidence to inspect, return needs_review instead of repeating discovery. classify_choices re-reads
+current DOM evidence and may carry selection_mode; repeating it cannot supply absent readback.
 This read-only inspection can register a typed answer slot only when trusted DOM evidence now supports it.
 Never treat a candidate as clickable, infer selection semantics from aria-pressed alone, or treat an
 unresolved control as locked. Inspect the reason in interaction.evidence; missing state readback requires
@@ -313,6 +314,11 @@ def plan_order(response, external_dependencies=()):
     for tid in byid:visit(tid)
     return order
 
+def mode_assertable(slot):
+    """An unresolved candidate choice group whose only blocker is single-vs-multiple, with a way to read the selection back."""
+    i=slot.get('interaction') or {};e=i.get('evidence') or {}
+    return i.get('adapter')=='candidate_choices' and str(e.get('reason','')).startswith('Single or multiple selection') and bool(e.get('state_attribute') or e.get('verification')=='result_icon')
+
 def validate_context(response, observation, failed=None):
     if response.question_key!=observation['question_key'] or response.observation_id!=observation['observation_id']:
         raise ValueError('TARGET_STALE: model response belongs to different evidence.')
@@ -333,10 +339,20 @@ def validate_context(response, observation, failed=None):
     if failed:
         if len(response.tasks)!=1 or response.tasks[0].task_id!=failed['task_id'] or response.tasks[0].slot_key!=failed['slot_key'] or response.tasks[0].depends_on!=failed.get('depends_on',[]):
             raise ValueError('GUARD_REJECTED: repair may change only the failed task.')
-    elif {t.slot_key for t in response.tasks}!={k for k,v in slots.items() if v.get('kind')!='unresolved'}:raise ValueError('QUESTION_INCOMPLETE: plan must cover every resolved offered slot (unresolved ones are re-checked by the harness, never planned).')
+    else:
+        planned={t.slot_key for t in response.tasks};resolved={k for k,v in slots.items() if v.get('kind')!='unresolved'}
+        # A candidate group whose ONLY missing evidence is pick-one vs pick-many may be planned directly: the
+        # operation is the model's reading (choose_one = one answer, set_choice_set = several). The extension
+        # accepts it only while the page text says neither and a selected-state readback exists, then verifies.
+        # Every other unresolved slot is still never planned. Models plan; they do not take optional detours.
+        if not resolved<=planned or not (planned-resolved)<={k for k,v in slots.items() if mode_assertable(v)}:
+            raise ValueError('QUESTION_INCOMPLETE: plan must cover every resolved offered slot (unresolved ones are re-checked by the harness, never planned).')
     for t in response.tasks:
         s=slots.get(t.slot_key)
-        if not s or OPERATIONS.get(s['kind'])!=t.operation:raise ValueError('GUARD_REJECTED: task does not match a resolved offered slot.')
+        if not s:raise ValueError('GUARD_REJECTED: task does not match a resolved offered slot.')
+        if mode_assertable(s) and s.get('kind')=='unresolved':
+            if t.operation not in ('choose_one','set_choice_set'):raise ValueError('GUARD_REJECTED: a candidate choice group takes choose_one or set_choice_set only.')
+        elif OPERATIONS.get(s['kind'])!=t.operation:raise ValueError('GUARD_REJECTED: task does not match a resolved offered slot.')
         labels=t.desired.labels if t.operation=='set_choice_set' else ([t.desired.label] if t.operation in ('choose_one','set_selection') else [])
         # A blank label means "this slot stays empty" (a spare statement row). It is legal exactly when the page itself
         # offers a blank choice -- the harness then chooses that entry, or touches nothing if the slot is already blank.

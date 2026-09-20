@@ -3,25 +3,29 @@
 <!-- The live Khan Academy exercise shape (read from the page on 2026-09-20): the answer group is a list of
      aria-pressed buttons named "(Choice A)".. inside a fieldset whose legend "Choose 1 answer:" is visible on
      screen but carries aria-hidden="true"; share buttons live in <header>, the breadcrumb in <nav>, and the
-     exercise controls (Draw on exercise / Start over / Skip / Check) in a plain div. ?mode=
+     exercise controls (Draw on exercise / Start over / Skip / Check) in a plain div. The choices sit in a scrolling
+     div[role=group] INSIDE the fieldset (the wrapper that cut the legend out of 0.10.39's text), and the breadcrumb
+     is links inside the course accordion, not a <nav>. ?mode=
        legend  -- the aria-hidden legend is present (the live page)
        none    -- no instruction at all: the page says neither pick-one nor pick-many
        hidden  -- the legend exists but is display:none: genuinely not on screen
        all     -- the legend reads "Select all that apply" (multi-select), also aria-hidden
+       conflict  -- the legend says both, so no reading (page or model) can stand
+       noreadback -- the buttons carry no aria-pressed: selection cannot be read back, so no plan may touch them
      Pressing a choice sets aria-pressed; in single modes the other choices are un-pressed (radio behaviour),
      in "all" they are independent. `clicks` records every choice click. -->
 <header><button id="share" aria-label="Share link">Share</button><button id="teams" aria-label="Share to Microsoft Teams (Opens in a new window)">Teams</button></header>
-<nav aria-label="breadcrumb"><span tabindex="0">Course: AP Macroeconomics</span><span tabindex="0">Unit 6</span></nav>
+<div role="group" aria-label="Content list"><div role="list" aria-label="Accordion control"><div role="listitem"><div role="region"><h3><a tabindex="0" href="#course">Course: AP Macroeconomics</a></h3><h3><a tabindex="0" href="#unit">Unit 6</a></h3></div></div></div></div>
 <main data-question-id="choice-mode">
 <form><fieldset>
 <legend id="legend" aria-hidden="true">Choose 1 answer:</legend>
 <p>The currency of Ghana is the cedi, and the currency of the United States is the dollar. If the exchange rate changes from 5 to 8 cedis per dollar, what will be the effect on net exports and employment in the United States?</p>
-<ul role="list">
+<div id="scroll" role="group" style="max-height:600px;overflow:auto"><ul role="list">
 <li><button type="button" aria-pressed="false" aria-label="(Choice A)">Net exports and employment will decrease.</button></li>
 <li><button type="button" aria-pressed="false" aria-label="(Choice B)">Net exports will increase, but employment will be unaffected.</button></li>
 <li><button type="button" aria-pressed="false" aria-label="(Choice C)">Net exports will decrease, but employment will be unaffected.</button></li>
 <li><button type="button" aria-pressed="false" aria-label="(Choice D)">Net exports and employment will increase.</button></li>
-</ul>
+</ul></div>
 </fieldset></form>
 <div id="controls"><button type="button" aria-label="Draw on exercise">Draw</button><button type="button" aria-label="Start over">Start over</button><button type="button">Skip</button><button type="button">Check</button></div>
 </main>
@@ -31,6 +35,8 @@ const legend=document.getElementById('legend');
 if(mode==='none')legend.remove();
 if(mode==='hidden')legend.style.display='none';
 if(mode==='all')legend.textContent='Select all that apply:';
+if(mode==='conflict')legend.textContent='Choose 1 answer. Select all that apply.';   // the page contradicts itself: no claim may settle it
+if(mode==='noreadback')for(const b of document.querySelectorAll('ul[role=list] button'))b.removeAttribute('aria-pressed');   // Quizlet-like: nothing to read back
 const choices=[...document.querySelectorAll('ul[role=list] button')];
 for(const b of choices)b.onclick=()=>{window.clicks.push(b.getAttribute('aria-label'));const on=b.getAttribute('aria-pressed')!=='true';
   if(mode!=='all')for(const o of choices)o.setAttribute('aria-pressed','false');

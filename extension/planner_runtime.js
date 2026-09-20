@@ -241,6 +241,9 @@
     }
     async key(key){await this.guard();return AssignmentVisual.key(this.tabId,key,()=>this.cancelled||this.b.stopped())}
     async modelCall(phase,body){const start=Date.now();try{return await this.b.request(phase,body,this.abort.signal)}finally{this.current?.recovery?.exclude(Date.now()-start)}}
+    modeAssertable(s){const e=s?.interaction?.evidence;return s?.kind==='unresolved'&&s.interaction?.adapter==='candidate_choices'&&String(e?.reason||'').startsWith('Single or multiple selection')&&!!(e?.state_attribute||e?.verification==='result_icon')}
+    async noteAssertion(s,result){if(!result?.asserted_mode)return;const word=result.asserted_mode==='choice'?'pick one':'pick many';
+      await this.event('INSPECT',result.accepted?`Model read this group as ${word}; accepted because the page text says neither`:`Model read this group as ${word}; not accepted`,{slot_key:s.slot_key,adapter:'candidate_choices',asserted_mode:result.asserted_mode,accepted:!!result.accepted,actual:result.evidence,action_executed:false})}
     matches(task,s){const d=task.desired;
       if(!TASK_OPERATION[s.kind]||TASK_OPERATION[s.kind]!==task.operation)return false;
       switch(task.operation){
@@ -260,6 +263,14 @@
       // (clear+retype / re-select), never a silent skip that leaves the same
       // unchanged state to be re-checked.
       const partId=this.current?.slot_parts?.[task.slot_key];let obs=partId?await this.showPart(null,partId):await this.observe(),s=this.slot(obs,task.slot_key);
+      if(this.modeAssertable(s)){
+        // The plan's operation is the model's reading of pick-one vs pick-many. The page decides whether it stands
+        // (its own text silent, a selected-state readback present); only then does the group become a typed slot.
+        const mode=task.operation==='choose_one'?'choice':'choice_set';
+        const verdict=await this.inspect(s.frame,s.target,'classify_choices',{selection_mode:mode});await this.noteAssertion(s,verdict);
+        if(!verdict.accepted)throw new Fault('GUARD_REJECTED',`The page does not support reading this group as ${mode==='choice'?'pick one':'pick many'}; nothing was clicked.`,verdict.evidence);
+        obs=await this.observe();s=this.slot(obs,task.slot_key);
+      }
       if(!TASK_OPERATION[s.kind]||TASK_OPERATION[s.kind]!==task.operation)throw new Fault('GUARD_REJECTED','Control type changed; the planned operation no longer applies.');
       if(!force&&this.matches(task,s))return {obs,s,skipped:true};
       if(force&&s.interaction?.evidence?.verification==='result_icon'&&s.current?.length)throw new Fault('GUARD_REJECTED','A graded result-card answer cannot be replayed or changed automatically.');
@@ -621,8 +632,11 @@
       // A slot that stayed unresolved after identification (a locked or computed cell) is not required in the plan; the
       // rounds after the batch re-check it in case answering unlocked it.
       const required=obs.slots.filter(s=>s.kind!=='unresolved');
-      if(!failed&&(tasks.length!==required.length||new Set(tasks.map(t=>t.slot_key)).size!==required.length||!required.every(r=>tasks.some(t=>t.slot_key===r.slot_key))))throw new Fault('QUESTION_INCOMPLETE','Plan does not cover every answerable slot.');
-      for(const t of tasks){const s=this.slot(obs,t.slot_key);if(!allowed[s.kind]||allowed[s.kind]!==t.operation)throw new Fault('GUARD_REJECTED','Task operation does not match the slot.');}
+      // The one unresolved slot a plan may name: a candidate choice group whose only missing evidence is pick-one vs
+      // pick-many. The operation is the model's reading; execute() has the page confirm it before anything is clicked.
+      const keys=new Set(tasks.map(t=>t.slot_key)),assertable=obs.slots.filter(s=>this.modeAssertable(s));
+      if(!failed&&(keys.size!==tasks.length||!required.every(r=>keys.has(r.slot_key))||![...keys].every(k=>required.some(r=>r.slot_key===k)||assertable.some(a=>a.slot_key===k))))throw new Fault('QUESTION_INCOMPLETE','Plan does not cover every answerable slot.');
+      for(const t of tasks){const s=this.slot(obs,t.slot_key);if(this.modeAssertable(s)){if(!['choose_one','set_choice_set'].includes(t.operation))throw new Fault('GUARD_REJECTED','A candidate choice group takes choose_one or set_choice_set only.');continue}if(!allowed[s.kind]||allowed[s.kind]!==t.operation)throw new Fault('GUARD_REJECTED','Task operation does not match the slot.');}
       const remaining=new Set(tasks.map(t=>t.task_id)),ordered=[];while(remaining.size){const t=tasks.find(t=>remaining.has(t.task_id)&&(t.depends_on||[]).every(id=>ordered.some(x=>x.task_id===id)||(failed?.depends_on||[]).includes(id)));if(!t)throw new Fault('GUARD_REJECTED','Dependency cycle or unknown task.');ordered.push(t);remaining.delete(t.task_id)}return ordered;
     }
     async inspectRequest(response,obs){
@@ -662,8 +676,7 @@
           let fresh=await this.observe(),s=this.slot(fresh,req.slot_key);
           const result=op==='inspect_options'?(s.kind==='selection'?await this.selectionOptions(s.slot_key,true):s.choices?.map(c=>({label:c.label,disabled:c.disabled}))):await this.inspect(s.frame,s.target,op,op==='classify_choices'&&req.selection_mode?{selection_mode:req.selection_mode}:{});
           evidence.push({slot_key:s.slot_key,operation:op,result});
-          // The one judgment the model may supply is written to the log as such, accepted or not.
-          if(op==='classify_choices'&&result?.asserted_mode)await this.event('INSPECT',result.accepted?`Model read this group as ${result.asserted_mode==='choice'?'pick one':'pick many'}; accepted because the page text says neither`:`Model read this group as ${result.asserted_mode==='choice'?'pick one':'pick many'}; not accepted`,{slot_key:s.slot_key,adapter:'candidate_choices',asserted_mode:result.asserted_mode,accepted:!!result.accepted,actual:result.evidence,action_executed:false});
+          if(op==='classify_choices')await this.noteAssertion(s,result);
         }
         }
       }
