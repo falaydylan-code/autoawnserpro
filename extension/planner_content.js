@@ -71,7 +71,8 @@
     // controls in the content footer, its breadcrumb in <nav>).
     const excluded=textExcluded+',aside,header,footer,nav,[role=toolbar],[role=tablist],[role=menu],[role=navigation],[role=banner],[role=contentinfo]';
     const auxiliary=/^(?:show|hide|toggle)?\s*(?:hint|bookmark|sound|audio|mute|settings|help|favorite|draw|start over|skip|report|share|flag)\b/i;
-    const pool=all(root,'button,[role=button],[aria-pressed],[tabindex]').filter(e=>shown(e)&&safe(e)&&!e.matches('input,textarea,select,td,th,[role=gridcell],[role=tab],svg,canvas')&&!known.some(k=>k===e||k.contains(e))&&!e.closest(excluded)&&!forbidden.test(name(e))&&!navigationKind(name(e))&&!auxiliary.test(name(e))&&(e.tabIndex>=0||e.hasAttribute('aria-pressed')));
+    // A link with a destination is navigation on every site (breadcrumbs, course lists), never an answer choice.
+    const pool=all(root,'button,[role=button],[aria-pressed],[tabindex]').filter(e=>shown(e)&&safe(e)&&!e.matches('input,textarea,select,td,th,[role=gridcell],[role=tab],svg,canvas,a[href]')&&!e.closest('a[href]')&&!known.some(k=>k===e||k.contains(e))&&!e.closest(excluded)&&!forbidden.test(name(e))&&!navigationKind(name(e))&&!auxiliary.test(name(e))&&(e.tabIndex>=0||e.hasAttribute('aria-pressed')));
     const nodes=pool.slice(0,400);
     const leaves=nodes.filter(e=>!nodes.some(n=>n!==e&&e.contains(n))),byContainer=new Map();
     for(const e of leaves){
@@ -88,7 +89,10 @@
       }
     }
     const found=[...byContainer].map(([container,members])=>{
-      const scope=container.closest('fieldset,[role=radiogroup],[role=group],article,[data-question-id]')||container.parentElement;
+      // A legend is by definition the caption of its fieldset, so the fieldset outranks any wrapper inside it: Khan
+      // Academy puts the choices in a scrolling div[role=group] INSIDE the fieldset, and the nearest group cut
+      // "Choose 1 answer:" out of the text (0.10.39, 3:51 PM).
+      const scope=container.closest('fieldset')||container.closest('[role=radiogroup],[role=group],article,[data-question-id]')||container.parentElement;
       const text=renderedText(scope||container,new Set(members),false,onScreen).text;
       const single=container.matches('[role=radiogroup]')||!!container.closest('[role=radiogroup]')||/\b(?:choose|select|pick)\s+(?:(?:the|a|an)\s+)?(?:one|1|single|(?:(?:correct|best)\s+)?answer)\b/i.test(text);
       const multiple=/\b(?:select|choose|check|pick)\s+(?:all|every|two|three|four|[2-9]|[1-9]\d+)\b|\b(?:multiple answers|more than one)\b/i.test(text);

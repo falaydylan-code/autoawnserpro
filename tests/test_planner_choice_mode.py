@@ -90,3 +90,52 @@ def test_page_text_beats_the_model_when_it_disagrees(extension):
     after = resolve(w)
     assert after['slots'][0]['kind'] == 'choice_set'                          # a refused claim leaves nothing behind
     assert page.evaluate('clicks') == []
+
+
+# 0.10.40: the live Khan rerun on 0.10.39 showed the model never takes the optional classify round -- it plans the
+# group directly, every time. So the planned operation IS the reading: choose_one = pick one, set_choice_set = pick
+# many. The page still decides whether it stands, before anything is clicked.
+def plan_directly(w, tid, operation='choose_one', label='(Choice A) — Net exports and employment will decrease.'):
+    return w.evaluate('''async ({operation,label})=>{
+      engine.b.request=async(phase,body)=>{calls.push({phase,body});if(phase==='verify')return {cost:0,response:{kind:'verified'}};
+        const o=body.observation,group=o.slots.find(s=>s.interaction?.adapter==='candidate_choices'||s.kind==='choice'||s.kind==='choice_set');
+        return {cost:0,response:{kind:'plan',question_key:o.question_key,observation_id:o.observation_id,
+          tasks:[{task_id:'t0',slot_key:group.slot_key,operation,desired:operation==='choose_one'?{label}:{labels:[label]},depends_on:[]}]}}};
+      const r=await engine.run();
+      return {status:r.status,events:r.events.map(e=>({phase:e.phase,detail:e.detail,failure_code:e.failure_code||null,cardinality:e.cardinality||null,accepted:e.accepted??null})),plans:calls.filter(c=>c.phase==='plan').length}}''',
+      {'operation': operation, 'label': label})
+
+
+def test_the_planned_operation_is_the_reading_when_the_page_says_neither(extension):
+    page, w, tid = navigate(extension, 'choice_mode.html?mode=none')
+    w.evaluate(BOOT, tid)
+    assert resolve(w)['slots'][0]['kind'] == 'unresolved'
+    result = plan_directly(w, tid)
+    assert result['status'] == 'finished', result['events'][-3:]
+    assert result['plans'] == 1                                                  # no detour round
+    assert page.evaluate('clicks') == ['(Choice A)']
+    assert next(e for e in result['events'] if e['detail'].startswith('Model read this group as pick one; accepted'))['accepted'] is True
+    assert next(e for e in result['events'] if e['phase'] == 'VERIFY' and e['detail'].endswith('answers verified'))['cardinality']
+
+
+def test_a_page_that_contradicts_itself_refuses_the_reading_before_any_click(extension):
+    page, w, tid = navigate(extension, 'choice_mode.html?mode=conflict')
+    w.evaluate(BOOT, tid)
+    assert resolve(w)['slots'][0]['evidence']['reason'] == MODE_REASON
+    result = plan_directly(w, tid)
+    assert result['status'] == 'needs_review'
+    stop = next(e for e in result['events'] if e['failure_code'] == 'GUARD_REJECTED')
+    assert 'does not support reading this group as pick one' in stop['detail']
+    assert next(e for e in result['events'] if e['detail'].startswith('Model read this group as pick one; not accepted'))
+    assert page.evaluate('clicks') == []
+
+
+def test_a_group_with_no_readback_cannot_be_planned_at_all(extension):
+    page, w, tid = navigate(extension, 'choice_mode.html?mode=noreadback')
+    w.evaluate(BOOT, tid)
+    slot = resolve(w)['slots'][0]
+    assert slot['kind'] == 'unresolved' and slot['evidence']['reason'].startswith('No supported selected-state readback')
+    result = plan_directly(w, tid)
+    assert result['status'] == 'needs_review'
+    assert any(e['failure_code'] == 'QUESTION_INCOMPLETE' for e in result['events'])
+    assert page.evaluate('clicks') == []

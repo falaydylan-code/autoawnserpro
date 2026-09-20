@@ -559,3 +559,19 @@ def test_selection_mode_rides_only_on_classify_choices():
         planner.parse_plan(raw(kind='request_inspection',tasks=[],inspection={'slot_key':'q/a','question':'x','requests':['classify_choices'],'selection_mode':'radio'}))
     stray=planner.parse_plan(raw(kind='request_inspection',tasks=[],inspection={'slot_key':'q/a','question':'x','requests':['inspect_slot'],'selection_mode':'choice'}))
     with pytest.raises(ValueError,match='selection_mode is only meaningful with classify_choices'):planner.validate_context(stray,o)
+
+
+def test_a_candidate_group_missing_only_its_mode_may_be_planned_and_the_operation_is_the_reading():
+    # 0.10.40: models plan; they do not take optional detours. choose_one / set_choice_set on such a group is the
+    # model's pick-one / pick-many reading; the extension has the page confirm it before any click. Every other
+    # unresolved slot is still never planned.
+    mode_only={'adapter':'candidate_choices','evidence':{'reason':'Single or multiple selection is not established by the visible instructions.','state_attribute':'aria-pressed','ready':False}}
+    no_readback={'adapter':'candidate_choices','evidence':{'reason':'No supported selected-state readback; inspect the widget before answering.','state_attribute':None,'ready':False}}
+    o=obs();o['slots'][0].update(kind='unresolved',options=['A','B'],interaction=mode_only)
+    assert planner.validate_context(planner.parse_plan(raw(tasks=[{'task_id':'t1','slot_key':'q/a','operation':'choose_one','desired':{'label':'A'},'depends_on':[]}])),o).kind=='plan'
+    assert planner.validate_context(planner.parse_plan(raw(tasks=[{'task_id':'t1','slot_key':'q/a','operation':'set_choice_set','desired':{'labels':['A','B']},'depends_on':[]}])),o).kind=='plan'
+    with pytest.raises(ValueError,match='choose_one or set_choice_set only'):
+        planner.validate_context(planner.parse_plan(raw(tasks=[{'task_id':'t1','slot_key':'q/a','operation':'set_selection','desired':{'label':'A'},'depends_on':[]}])),o)
+    o['slots'][0]['interaction']=no_readback
+    with pytest.raises(ValueError,match='resolved offered slot'):
+        planner.validate_context(planner.parse_plan(raw(tasks=[{'task_id':'t1','slot_key':'q/a','operation':'choose_one','desired':{'label':'A'},'depends_on':[]}])),o)
