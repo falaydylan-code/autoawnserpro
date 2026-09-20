@@ -91,7 +91,7 @@ def reserve_plan(owner, run_id, request_id, question, phase, cap, amount, model,
         if cost+amount>float(setting('MAX_COST_PER_INVITE','2')):raise ValueError(f'BUDGET_EXHAUSTED: the worst-case cost of this call (${amount:.2f}) exceeds the remaining allowance for this invite (${max(0,float(setting("MAX_COST_PER_INVITE","2"))-cost):.2f}).')
         if run[2]+amount>min(cap,run[1]):raise ValueError(f"BUDGET_EXHAUSTED: the worst-case cost of this call (${amount:.2f}; a screenshot reserves the full model context) exceeds what is left of the run spend limit (${max(0,min(cap,run[1])-run[2]):.2f} of ${min(cap,run[1]):.2f}). Raise the spend limit in the panel for this model.")
         count=con.execute('SELECT COUNT(*) FROM planner_calls WHERE run_id=? AND question=? AND phase=?',(run_id,question,phase)).fetchone()[0]
-        if count >= ({'repair':2,'plan':3,'inspection_correction':1,'visual':125,'verify':4}.get(phase,0)):raise ValueError('BUDGET_EXHAUSTED: question model-call budget reached.')
+        if count >= ({'repair':2,'plan':3,'inspection_correction':1,'format_correction':1,'visual':125,'verify':4}.get(phase,0)):raise ValueError('BUDGET_EXHAUSTED: question model-call budget reached.')
         import time
         con.execute('INSERT INTO planner_calls(id,run_id,question,phase,reserved,status,model,created) VALUES(?,?,?,?,?,?,?,?)',(request_id,run_id,question,phase,amount,'pending',model,time.time()))
         con.execute('UPDATE usage SET calls=calls+1,unknown=unknown+1 WHERE owner=?',(budget_owner,))

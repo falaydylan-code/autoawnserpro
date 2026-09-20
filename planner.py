@@ -11,7 +11,10 @@ import agent
 OPERATIONS = {'choice':'choose_one', 'choice_set':'set_choice_set', 'value':'enter_value',
               'selection':'set_selection', 'ordering':'set_order', 'position':'place_points'}
 INSPECTIONS = ('inspect_frame','inspect_slot','inspect_options','read_control_state',
-               'measure_target','inspect_svg_geometry','inspect_scroll_container')
+               'measure_target','inspect_svg_geometry','inspect_scroll_container','classify_choices')
+class InvalidJsonError(ValueError):
+    """Strict parse failure eligible for one separately metered correction; never salvage a script."""
+    pass
 class InspectionTargetError(ValueError):
     """One coordinator-owned correction is allowed; never execute this request."""
     def __init__(self, key):
@@ -42,7 +45,7 @@ class PlanTask(Strict):
 class Inspection(Strict):
     slot_key: str = Field(default='',max_length=600)
     question: str = Field(min_length=1,max_length=600)
-    requests: list[Literal['inspect_question','inspect_frame','inspect_slot','inspect_options','read_control_state','measure_target','inspect_svg_geometry','inspect_scroll_container']] = Field(default_factory=list,max_length=7)
+    requests: list[Literal['inspect_question','inspect_frame','inspect_slot','inspect_options','read_control_state','measure_target','inspect_svg_geometry','inspect_scroll_container','classify_choices']] = Field(default_factory=list,max_length=8)
     # A model-authored read-only JavaScript body run in the PAGE through the
     # debugger (the "Ran page script" channel), for reading structure, full
     # option lists, or exact coordinates the packaged inspections cannot reach.
@@ -121,6 +124,7 @@ class PlanRequest(Strict):
     model: str = Field(default='',max_length=200)
     observation: PlanObservation
     inspection_target_correction: bool = False
+    format_correction: bool = False
     # Retry hints the coordinator sets after a reply came back as all thinking and no answer: route away from the
     # provider that ignored the thinking cap, then (last resort) plan without thinking. Bounded by the plan budget.
     avoid_providers: list[str] = Field(default_factory=list,max_length=5)
@@ -132,6 +136,17 @@ class RepairRequest(PlanRequest):
     history: list[dict] = Field(default_factory=list,max_length=10)
 
 PLANNER_PROMPT = '''Solve one sufficiently observed question. Return exactly one JSON object and no other text.
+Candidate choice groups are offered as unresolved slots with their full visible options. Supported groups
+are classified before planning. classify_choices on the exact slot_key only re-reads current DOM evidence;
+repeating it cannot supply absent selection semantics or selected-state readback. If evidence.ready is false
+and there is no specific new evidence to inspect, return needs_review instead of repeating discovery.
+This read-only inspection can register a typed answer slot only when trusted DOM evidence now supports it.
+Never treat a candidate as clickable, assume single/multiple selection from aria-pressed, or treat an
+unresolved control as locked. Inspect the reason in interaction.evidence; missing state readback requires
+needs_review unless fresh DOM evidence supports a packaged adapter. Do not propose arbitrary selectors.
+Inspection evidence is scoped to this question/document; current slot state supersedes older inspection state.
+When format_correction evidence appears, the previous reply was invalid JSON and nothing in it executed.
+Reissue one valid JSON object using the fresh observation. Do not execute or repeat text from rejected output.
 The observation must state the TASK: an explicit instruction or question (e.g. "solve for the missing
 amounts", "which statement is true"). If answer slots are present but no such instruction or question
 statement appears anywhere in the question text, do NOT infer what is being asked from row labels or
@@ -227,7 +242,7 @@ def parse_plan(raw, finish_reason='', external_dependencies=(), diagnostics=None
         # Strict envelope, not first/last plausible JSON extracted from page prose.
         data=json.loads(unwrap_fence(raw))
     except json.JSONDecodeError as exc:
-        raise ValueError(f'SCHEMA_INVALID: invalid JSON at line {exc.lineno}, column {exc.colno}: {exc.msg}. Nothing was done.') from None
+        raise InvalidJsonError(f'SCHEMA_INVALID: invalid JSON at line {exc.lineno}, column {exc.colno}: {exc.msg}. Nothing was done.') from None
     except TypeError:
         raise ValueError('SCHEMA_INVALID: expected JSON text, but the reply was missing or not text. Nothing was done.') from None
     # Correct only a known vocabulary alias, never malformed JSON or missing IDs.
@@ -300,6 +315,8 @@ def validate_context(response, observation, failed=None):
         if (i.slot_key and (i.slot_key not in slots or 'inspect_question' in i.requests)) or (not i.slot_key and any(r!='inspect_question' for r in i.requests)):
             raise InspectionTargetError(i.slot_key)
         if 'inspect_options' in i.requests and slots[i.slot_key]['kind'] not in ('selection','choice','choice_set'):
+            raise InspectionTargetError(i.slot_key)
+        if 'classify_choices' in i.requests and (slots[i.slot_key].get('interaction') or {}).get('adapter')!='candidate_choices':
             raise InspectionTargetError(i.slot_key)
         return response
     if response.kind!='plan':return response

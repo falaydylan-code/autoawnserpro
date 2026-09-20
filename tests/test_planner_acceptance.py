@@ -287,7 +287,7 @@ def test_extension_waits_as_long_as_the_backend_advertises_and_names_the_wait_wh
    const Original=AssignmentPlanner.Engine,originalFetch=fetch,h=__assignmentHarness,before=h.requestWaitMs;
    AssignmentPlanner.Engine=class {constructor(){this.ledger={}}async run(){}};
    globalThis.fetch=async(u,opts={})=>{u=String(u);
-     if(u.includes('/api/capabilities'))return new Response(JSON.stringify({protocol:4,request_wait_seconds:240,features:['task_plans','stable_slots','typed_verification','bounded_repair','frame_scoped_inspection','interaction_classification']}));
+     if(u.includes('/api/capabilities'))return new Response(JSON.stringify({protocol:4,request_wait_seconds:240,features:['task_plans','stable_slots','typed_verification','bounded_repair','frame_scoped_inspection','interaction_classification','choice_discovery','bounded_format_correction']}));
      if(u.includes('/api/guest'))return new Response(JSON.stringify({token:'t'}));
      return new Promise((_,reject)=>opts.signal?.addEventListener('abort',()=>reject(new DOMException('aborted','AbortError'))));};   // the plan never answers
    const out={};

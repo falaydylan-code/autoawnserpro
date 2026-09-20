@@ -11,8 +11,15 @@
   // node: courseware rebuilds a sheet's nodes when its tab is shown again, and a memory pinned to the old node
   // forgot every confirmed cell the moment the harness returned to type (E1-9, 8:51 PM: GUARD_REJECTED on cell 1).
   let confirmedSheetValues=new Set(),classificationQuestion='';
+  const classifiedChoices=new WeakMap();
+  const choiceReceipts=new WeakMap();
+  const resultIcon='svg[data-testid="icon-check"],svg[data-testid="icon-close-x"],[data-testid="AssemblyAnimatedIcon--CSS"][aria-label="check"]';
   const sensitive=/credit.?card|card.?number|cvv|cvc|social.?security|ssn|iban|routing|account.?number/i;
   const forbidden=/^(?:delete|remove|discard|reset|sign\s*(?:in|out)|log\s*(?:in|out)|register|accept|agree|allow|consent|download|export|purchase|buy|pay|checkout)\b/i;
+  // One vocabulary owns both navigation discovery and exclusion from answers.
+  const navigationKind=label=>forbidden.test(label)?'':/^(next(?: question| part)?|continue)$/i.test(label)?'advance':/^(try it!?|check(?: my work| answer)?|submit answer)$/i.test(label)?'check':/^(submit(?: assignment| all answers)?|finish(?: assignment)?|hand in|turn in)$/i.test(label)?'submit':'';
+  const textExcluded='script,style,template,nav,output,[role=listbox],[role=option],[role=status],[role=alert],[class*=feedback],[class*=result],[class*=correct],[class*=grade],[class*=score],[class*=saved],[class*=attempt],#__assignment_lab_cursor,#__assignment_lab_badges';
+  const liveFeedback=e=>e.hasAttribute('aria-live')&&!e.querySelector('input,textarea,select,button,[tabindex],[role=radio],[role=checkbox]')&&/^(?:(?:correct|incorrect|wrong)[.!]?$|(?:the )?correct answer(?:\s+is\b|\s*:)|your answer(?:\s+is\b|\s*:)|you (?:answered|selected)\b)/i.test(norm(e.innerText));
   const shown=e=>!!e?.isConnected&&!e.closest('[hidden],[aria-hidden=true],script,style,template')&&getComputedStyle(e).visibility!=='hidden'&&getComputedStyle(e).display!=='none'&&!!e.getClientRects().length;
   const name=e=>norm(e.getAttribute('aria-label')||[...(e.labels||[])].map(l=>l.innerText).join(' ')||e.innerText||e.getAttribute('title')||e.getAttribute('placeholder')||'');
   const safe=e=>!sensitive.test([e.type,e.name,e.id,e.autocomplete,e.getAttribute('aria-label')].join(' '))&&!['hidden','file'].includes(e.type);
@@ -46,9 +53,50 @@
     // owns the single open menu; anything else stays null (WRONG_MENU_OWNER).
     const expanded=cells.filter(c=>c.getAttribute('aria-expanded')==='true');
     return expanded.length===1?expanded[0]:null;}
-  function renderedText(root,exclude){let parts=[],count=0,complete=true;const walk=n=>{if(++count>12000){complete=false;return}if(n.nodeType===3){if(norm(n.textContent))parts.push(n.textContent);return}if(n.nodeType!==1)return;
-    if(exclude.has(n)||!shown(n)||n.matches('script,style,template,button,nav,output,[role=listbox],[role=option],[role=status],[role=alert],[aria-live],[class*=feedback],[class*=result],[class*=correct],[class*=grade],[class*=score],[class*=saved],[class*=attempt],#__assignment_lab_cursor,#__assignment_lab_badges'))return;
+  function renderedText(root,exclude,choice=false){let parts=[],count=0,complete=true;const walk=n=>{if(++count>12000){complete=false;return}if(n.nodeType===3){if(norm(n.textContent))parts.push(n.textContent);return}if(n.nodeType!==1)return;
+    // aria-live announces changes, including whole questions; it is not evidence of feedback.
+    if(exclude.has(n)||!shown(n)||(!choice&&n.matches('button'))||n.matches(textExcluded)||n.matches(resultIcon)||liveFeedback(n))return;
     if(n.matches('input,textarea,select'))return;for(const c of n.childNodes)walk(c);if(n.shadowRoot)for(const c of n.shadowRoot.childNodes)walk(c)};walk(root);return {text:norm(parts.join(' ')),complete};}
+  function choiceLabel(e,container=null){let branch=e;while(container&&branch.parentElement&&branch.parentElement!==container)branch=branch.parentElement;const visible=renderedText(branch,new Set(),true).text,accessible=norm(e.getAttribute('aria-label')||e.getAttribute('title')||'');return visible&&accessible&&visible!==accessible&&!visible.includes(accessible)?accessible+' — '+visible:visible||accessible;}
+  function discoverChoices(root,known){
+    // A candidate is evidence, not permission to click. Never infer an answer group from the whole page.
+    const excluded=textExcluded+',aside,[role=toolbar],[role=tablist],[role=menu]';
+    const auxiliary=/^(?:show|hide|toggle)?\s*(?:hint|bookmark|sound|audio|mute|settings|help|favorite)\b/i;
+    const pool=all(root,'button,[role=button],[aria-pressed],[tabindex]').filter(e=>shown(e)&&safe(e)&&!e.matches('input,textarea,select,td,th,[role=gridcell],[role=tab],svg,canvas')&&!known.some(k=>k===e||k.contains(e))&&!e.closest(excluded)&&!forbidden.test(name(e))&&!navigationKind(name(e))&&!auxiliary.test(name(e))&&(e.tabIndex>=0||e.hasAttribute('aria-pressed')));
+    const nodes=pool.slice(0,400);
+    const leaves=nodes.filter(e=>!nodes.some(n=>n!==e&&e.contains(n))),byContainer=new Map();
+    for(const e of leaves){
+      // At most four ancestors; the nearest repeated siblings own the group. A wrapper around each
+      // card/button is fine, but a second list, field, table or toolbar is not another answer option.
+      for(let container=e.parentElement,depth=0;container&&container!==root&&container.tagName!=='BODY'&&depth<4;container=container.parentElement,depth++){
+        if(container.matches(excluded))break;
+        const members=leaves.filter(n=>container.contains(n));if(members.length<2)continue;
+        if(members.length>100){limited=true;break;}
+        const branches=members.map(n=>{let b=n;while(b.parentElement!==container&&b.parentElement)b=b.parentElement;return b});
+        if(new Set(branches).size!==members.length||new Set(branches.map(b=>b.tagName)).size!==1||new Set(members.map(n=>n.tagName+'|'+(n.getAttribute('role')||''))).size!==1)break;
+        if(branches.some(b=>b.matches('ul,ol,fieldset,table,nav,aside')||b.querySelector('input,textarea,select,ul,ol,fieldset,table')))break;
+        byContainer.set(container,members);break;
+      }
+    }
+    const found=[...byContainer].map(([container,members])=>{
+      const scope=container.closest('fieldset,[role=radiogroup],[role=group],article,[data-question-id]')||container.parentElement;
+      const text=renderedText(scope||container,new Set(members)).text;
+      const single=container.matches('[role=radiogroup]')||!!container.closest('[role=radiogroup]')||/\b(?:choose|select|pick)\s+(?:(?:the|a|an)\s+)?(?:one|1|single|(?:(?:correct|best)\s+)?answer)\b/i.test(text);
+      const multiple=/\b(?:select|choose|check|pick)\s+(?:all|every|two|three|four|[2-9]|[1-9]\d+)\b|\b(?:multiple answers|more than one)\b/i.test(text);
+      const mode=single!==multiple?(multiple?'choice_set':'choice'):null;
+      const attribute=['aria-pressed','aria-checked','aria-selected'].find(a=>members.every(e=>['true','false'].includes(e.getAttribute(a))))||null;
+      // Named answer containers with individually named option cards are an observable component
+      // contract, independent of hostname and generated CSS. Its result must be on the exact card
+      // we clicked; a check icon on another card may only be a revealed answer, never a selection.
+      const optionIds=members.map(e=>e.getAttribute('data-testid')||e.querySelector('[data-testid^="option-"]')?.getAttribute('data-testid')||'');
+      const resultCards=!attribute&&mode==='choice'&&/\b(?:answers|choices|options)\b/i.test(container.getAttribute('data-testid')||'')&&members.every(e=>e.matches('section[tabindex],button,[role=button]'))&&optionIds.every(id=>/^option-\d+$/.test(id))&&new Set(optionIds).size===members.length;
+      const labels=members.map(e=>choiceLabel(e,container)),unique=labels.every(Boolean)&&new Set(labels).size===labels.length;
+      const signature=JSON.stringify({members:members.map(key),labels,mode,attribute,resultCards});
+      const reason=!unique?'Answer labels are missing or repeated.':!mode?'Single or multiple selection is not established by the visible instructions.':!attribute&&!resultCards?'No supported selected-state readback; inspect the widget before answering.':'';
+      return {container,members,labels,mode,attribute,resultCards,signature,reason,scope:text,ready:!reason};
+    });
+    found.complete=pool.length<=400;return found;
+  }
   // Supplemental source data only: never register targets or change question identity.
   function readTables(root,excluded){
     const tables=[];let complete=true,remaining=300,characters=12000;
@@ -163,6 +211,11 @@
     }
     const editors=[...e.querySelectorAll('input[type=number],textarea,input[inputmode=numeric],input[inputmode=decimal]')].filter(n=>shown(n)&&safe(n)&&!n.disabled&&!n.readOnly&&!n.matches('[role=combobox],[aria-haspopup]'));
     if(editors.length===1)return {kind:'value',adapter:'contained_text',editor_target:register(editors[0]),evidence:['contained_numeric_or_multiline_input']};
+    // Packaged jSheet contract: response marks editable cells. Spare cells without that marker are
+    // noneditable now, and are reclassified if completing another row adds it. Do not generalize this
+    // evidence to arbitrary unknown controls or equate a failed activation with a disabled field.
+    if(!e.matches('.response')&&e.matches('td.responseCell')&&e.closest('table.jSheet')&&e.closest('.jSheetParent')?.querySelector('textarea.jSheetControls_formula')&&!editors.length)
+      return {kind:'unresolved',adapter:'sheet_inactive',read_only:true,evidence:['recognized_sheet_without_editable_marker']};
     return {kind:'unresolved',adapter:'unknown',evidence:[editors.length>1?'multiple_possible_editors':'answer_location_without_interaction_evidence']};
   }
   function scrollInfo(e,point=null){
@@ -247,13 +300,14 @@
   function observe(){
     limited=false;
     const candidates=all(document,'[data-question-id],main,[role=main],.question-content').filter(shown);
-    const root=candidates.find(e=>e.matches('[data-question-id]')&&e.querySelector('input,textarea,select,td.responseCell,svg,canvas'))||candidates.find(e=>e.matches('main,[role=main]'))||document.body;
-    let elements=all(root,'input,textarea,[role=radio],[role=checkbox],'+answerCells+',ol[data-sortable],[data-rbd-droppable-id],svg,canvas').filter(e=>shown(e)&&safe(e));
+    const root=candidates.find(e=>e.matches('[data-question-id]')&&e.querySelector('input,textarea,select,td.responseCell,svg,canvas,button,[tabindex]'))||candidates.find(e=>e.matches('main,[role=main]'))||document.body;
+    let elements=all(root,'input,textarea,[role=radio],[role=checkbox],'+answerCells+',ol[data-sortable],[data-rbd-droppable-id],svg,canvas').filter(e=>shown(e)&&safe(e)&&!e.matches(resultIcon));
     const cells=elements.filter(e=>e.matches(answerCells)&&!(e.closest('td.responseCell,[role=gridcell]')&&e.closest('td.responseCell,[role=gridcell]')!==e));
     // A sheet's floating editor is a representation of its cell, not a new slot
     // or question. Keep identity stable when it appears, moves, or disappears.
     if(cells.some(sheetCell))elements=elements.filter(e=>!e.matches('textarea.jSheetControls_formula,textarea.jSheetInPlaceEdit'));
-    const excluded=new Set(elements.filter(e=>!['radio','checkbox'].includes(e.type)&&!e.matches('[role=radio],[role=checkbox]')));
+    const discovered=discoverChoices(root,elements),candidateMembers=discovered.flatMap(g=>g.members);
+    const excluded=new Set([...elements.filter(e=>!['radio','checkbox'].includes(e.type)&&!e.matches('[role=radio],[role=checkbox]')),...candidateMembers]);
     // Parts. A tab strip inside the question root (the ARIA tab pattern: role=tab, aria-selected, aria-controls) means
     // the question has several separately answered parts and only the selected one is visible. Each tab is reported
     // as a part; the runtime reveals the others by clicking them, one at a time, and observes each while it is visible.
@@ -278,7 +332,7 @@
     // counter or a "saved" annotation appearing after input does not fork the
     // question into a new key and abandon the verified answer.
     // Transient dropdown editors and expand buttons do not define a question.
-    const structure=elements.filter(e=>!e.matches('input[type=button],input[type=submit],input[type=reset]')&&!cells.some(c=>c!==e&&c.contains(e))&&!panels.some(pn=>pn.contains(e))).map(e=>key(e)).join(',');
+    const structure=[...elements,...(elements.length?[]:candidateMembers)].filter(e=>!e.matches('input[type=button],input[type=submit],input[type=reset]')&&!cells.some(c=>c!==e&&c.contains(e))&&!panels.some(pn=>pn.contains(e))).map(e=>key(e)).join(',');
     const question_key=hash(platform ? location.pathname+'|qid:'+platform
       : location.pathname+'|'+location.hash+'|'+position+'|'+structure+'|'+identityStem.text);
     if(classificationQuestion!==question_key){classificationQuestion=question_key;confirmedSheetValues=new Set();}
@@ -297,7 +351,7 @@
       }else if(cells.includes(e)){const detected=interaction(e,cells,target,slotKey(e)),s=add(e,detected.kind,name(e)||norm(e.closest('tr')?.cells[0]?.textContent),e.tagName==='SELECT'?[...e.options].map(o=>norm(o.text)):[],value(e));
         // The editable combobox often precedes the arrow in DOM order. Prefer
         // the explicit menu button; clicking the text editor won't open it.
-        s.interaction=detected;if(detected.adapter==='contained_text')s.current=targets.get(detected.editor_target).value;
+        s.interaction=detected;s.disabled||=detected.read_only===true;if(detected.adapter==='contained_text')s.current=targets.get(detected.editor_target).value;
         s.opening_control=detected.opening_control||{status:'missing',candidates:[]};
         {const combo=e.matches('[role=combobox]')?e:e.querySelector('[role=combobox]');if(combo&&shown(combo))s.combobox=target(combo);}
         s.representations=s.opening_control.status==='resolved'?s.opening_control.candidates.map(c=>c.target):[];
@@ -311,13 +365,23 @@
     }
     for(const [gid,es] of groups){const group=es[0].closest('fieldset,[role=radiogroup],[role=group]')||es[0];const s=add(group,gid.startsWith('radio')?'choice':'choice_set',name(group)||'Choose',es.map(name),es.filter(e=>e.checked||e.getAttribute('aria-checked')==='true').map(name));
       s.slot_key=question_key+'/'+(parts.length&&partFor(group)?partFor(group).slice(5)+'/':'')+gid;s.choices=es.map(e=>({label:name(e),target:target(e),checked:!!e.checked||e.getAttribute('aria-checked')==='true',disabled:!!e.disabled||e.getAttribute('aria-disabled')==='true'}));}
+    for(const g of discovered){
+      const signature=question_key+'|'+g.signature,proof=classifiedChoices.get(g.container);
+      const receipt=choiceReceipts.get(g.container),owned=receipt?.signature===signature&&g.members.includes(receipt.element);
+      const outcome=owned?receipt.element.querySelector(resultIcon):null;
+      const orphanedResult=g.resultCards&&g.members.some(e=>e.querySelector(resultIcon))&&!owned;
+      const kind=g.ready&&proof===signature&&!orphanedResult?g.mode:'unresolved';
+      const current=g.attribute?g.members.flatMap((e,i)=>e.getAttribute(g.attribute)==='true'?[g.labels[i]]:[]):outcome?[receipt.label]:[];
+      const s=add(g.container,kind,renderedText(g.container,new Set(g.members)).text||'Answer choices',g.labels,current);
+      s.interaction={adapter:'candidate_choices',evidence:{grouping:'repeated_siblings',selection_mode:g.mode,state_attribute:g.attribute,verification:g.resultCards?'result_icon':'state_attribute',reason:orphanedResult?'Feedback is already present without a trusted execution receipt.':g.reason,ready:g.ready&&!orphanedResult},candidate_ids:g.members.map(target)};
+      s.choices=g.members.map((e,i)=>({label:g.labels[i],target:target(e),checked:current.includes(g.labels[i]),disabled:!!e.disabled||e.getAttribute('aria-disabled')==='true'}));
+      s.disabled=s.choices.every(c=>c.disabled);s.discoverySignature=signature;
+      s.result_feedback=!!(g.resultCards&&g.container.querySelector(resultIcon));
+      s.answer_result=outcome?(outcome.matches('[data-testid="icon-close-x"]')?'incorrect':'correct'):null;
+    }
     const menus=all(document,'[role=listbox] [role=option]').filter(shown).map(e=>{const c=owner(e,cells);return {label:name(e),target:target(e),owner:c?slotKey(c):null,disabled:!!e.disabled||e.getAttribute('aria-disabled')==='true'}});
     const navigation=all(document,'button,a,[role=button],input[type=submit]').filter(shown).map(e=>{
-      const label=name(e)||e.value||'';let kind='';
-      if(forbidden.test(label))return null;
-      if(/^(next(?: question| part)?|continue)$/i.test(label))kind='advance';
-      else if(/^(try it!?|check(?: my work| answer)?|submit answer)$/i.test(label))kind='check';
-      else if(/^(submit(?: assignment| all answers)?|finish(?: assignment)?|hand in|turn in)$/i.test(label))kind='submit';
+      const label=name(e)||e.value||'',kind=navigationKind(label);
       return kind?{kind,label,target:target(e),disabled:!!e.disabled||e.getAttribute('aria-disabled')==='true'}:null}).filter(Boolean);
     const feedback=all(document,'[role=status],[role=alert],output,.feedback,.correct-answer').filter(shown).map(e=>norm(e.innerText)).join(' ');
     const locked=/correct|incorrect|your answer/i.test(feedback)&&slots.length>0&&slots.every(s=>s.disabled||s.choices?.every(c=>c.disabled));
@@ -328,7 +392,7 @@
     last={observation_id,question_key,document_id:doc,question:stem.text||norm(document.title),tables:tableContext.tables,table_context_complete:tableContext.complete,slots,menus,navigation,feedback,page_state,enumeration,parts:partList,
       save_state:/\bsaved\b/i.test(feedback)?'confirmed':/\bsaving\b/i.test(feedback)?'pending':'unavailable',
       grade_state:/incorrect|wrong/i.test(feedback)?'incorrect':/partial/i.test(feedback)?'partial':/correct/i.test(feedback)?'correct':'unknown',
-      completeness:{complete:!incomplete&&!limited,note:(incomplete||limited)?'QUESTION_INCOMPLETE: traversal or identity limit; inspect a smaller question.':''},targets,
+      discovery_complete:discovered.complete,completeness:{complete:!incomplete&&!limited,note:(incomplete||limited)?'QUESTION_INCOMPLETE: traversal or identity limit; inspect a smaller question.':''},targets,
       frames:all(root,'iframe,frame').filter(shown).map(e=>{const r=e.getBoundingClientRect();let exact=true;for(let n=e;n;n=n.parentElement)if(getComputedStyle(n).transform!=='none')exact=false;return {target:target(e),src:e.src,title:e.title,x:r.x+e.clientLeft,y:r.y+e.clientTop,w:e.clientWidth,h:e.clientHeight,exact:exact&&Math.abs(r.width-e.offsetWidth)<1}}),visual:!!root.querySelector('img,svg,canvas')};
     const {targets:ignored,...publicState}=last;
     return {ok:true,...publicState,origin:location.origin,url:location.href,host:location.host};
@@ -341,6 +405,21 @@
     if(freshQuestion!==last.question_key)return fail('TARGET_STALE','Question changed.');
     const e=last.targets.get(m.target);
     if(!e||!shown(e)||!safe(e))return fail('TARGET_MISSING','Target unavailable or excluded.');
+    if(m.operation==='begin_choice'){
+      const s=last.slots.find(s=>s.slot_key===m.expected_choice_owner&&s.kind==='choice'&&s.interaction?.evidence?.verification==='result_icon');
+      const c=s?.choices.find(c=>c.target===m.target&&c.label===m.expected_label);
+      if(!c||c.disabled||s.choices.some(c=>last.targets.get(c.target)?.querySelector(resultIcon)))return fail('GUARD_REJECTED','Result-card entry needs a fresh, ungraded group and an exact offered choice.');
+      const group=last.targets.get(s.target);choiceReceipts.set(group,{element:e,label:c.label,signature:s.discoverySignature});
+      return {ok:true};
+    }
+    if(m.operation==='classify_choices'){
+      // Re-extract the group in the trusted inspector; model text is never classification authority.
+      const prior=last;observe();const fresh=last;last=prior;
+      const s=fresh.slots.find(s=>s.target===m.target&&s.interaction?.adapter==='candidate_choices');
+      if(!s||fresh.targets.get(s.target)!==e)return fail('TARGET_STALE','Choice candidates changed during inspection.');
+      if(s.interaction.evidence.ready)classifiedChoices.set(e,s.discoverySignature);
+      return {ok:true,promoted:!!s.interaction.evidence.ready,evidence:s.interaction.evidence,options:s.options};
+    }
     if(m.expected_menu_owner){const owners=last.slots.filter(s=>s.kind==='selection'),cells=owners.map(s=>last.targets.get(s.target)),cell=owner(e,cells);
       // The owning cell is named by its RECORDED slot key -- the one spelling every other check uses (it carries the
       // part since 0.10.28). Rebuilding the name by hand here compared two spellings of the same cell and refused
@@ -379,7 +458,7 @@
     return {ok:true,...box,actionable,hit:!!hit&&(hit===e||e.contains(hit)||[...(e.labels||[])].some(l=>l===hit||l.contains(hit))),focused,tag:e.tagName,value:value(e),selection,
       target_info:describe(e),hit_info:describe(hit),binding:binding(e),click_point:point,scroll,
       visibility:scroll.clipped?'offscreen_or_clipped':hit&&(hit===e||e.contains(hit))?'visible':'occluded',
-      checked:!!e.checked||e.getAttribute('aria-checked')==='true',options:e.tagName==='SELECT'?[...e.options].map(o=>({label:norm(o.text),selected:o.selected,disabled:o.disabled||o.parentElement.disabled===true})):undefined,
+      checked:!!e.checked||e.getAttribute('aria-checked')==='true'||e.getAttribute('aria-pressed')==='true'||e.getAttribute('aria-selected')==='true',options:e.tagName==='SELECT'?[...e.options].map(o=>({label:norm(o.text),selected:o.selected,disabled:o.disabled||o.parentElement.disabled===true})):undefined,
       slot:s?.slot_key,interaction:s?.interaction,selectedIndex:e.tagName==='SELECT'?e.selectedIndex:undefined};
   }
   globalThis.__assignmentPlannerInspector=true;
