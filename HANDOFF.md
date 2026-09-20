@@ -1,5 +1,15 @@
 # Handoff log
 
+## 2026-09-20 - claude (integrator) - 0.10.38 merged and deployed; M3-9 confirmed on 0.10.37
+
+**Did:** Dylan confirmed M3-9 completed on 0.10.37 (the opener-label fix held live) and said to deploy the Codex update. Committed Codex's finished tree on codex/cross-site-discovery (5612367), merged into codex/optional-numbering (3e065df, clean, no conflicts), refreshed deploy-source file by file (diff clean, local capabilities check 0.10.38 with choice_discovery + bounded_format_correction), `railway up`, live `/api/capabilities?protocol=4` reports 0.10.38, health ok. Backend first; the 0.10.37 extension keeps working against it (its feature gate is a subset) until Dylan reloads.
+
+**Verified:** Full suite on the exact tree by the other Claude session: 426 passed + 1 Playwright TargetClosedError (browser crash) that passes alone. Merged-tree smoke: discovery contract + planner contract + core + result cards + openers + sheet entry = 141 passed. Review record: plans/cross-site-discovery/REVIEW-b5-final.md (A-G verified in code).
+
+**Left undone:** Dylan reloading the extension to 0.10.38 and a first live run on it (M3-9 again is the regression check; a Khan MCQ is the new-path check). Quizlet result cards are fixture-verified only -- live CSS-check ancestry and an installed-extension Quizlet run are unfinished; 0.10.38 does not claim Quizlet support. Two prior items unchanged: same-frame nested scroll (`area` field), and the >100-candidate container still flipping `limited` (planner_content.js discoverChoices).
+
+**Watch out:** New base for every branch is 3e065df. Worktrees: assignment-agent-formats (claude/question-formats), assignment-agent-sites (claude/site-compat, the other Claude session, aria-live/aria-pressed work still uncommitted), orca/workspaces/.../codex-cross-site-discovery (codex/cross-site-discovery, now committed). The stale checkout C:/Users/falay/assignment-agent is still stale.
+
 ## 2026-09-20 — claude 03 — final suite reran, green
 
 **Did:** Ran the exact command the prior entry left pending: `python -m pytest -q --tb=short --junitxml=C:/Users/falay/AppData/Local/Temp/assignment-discovery-full-suite-final.xml` on this tree (uncommitted 0.10.38, base ba801df). No source edited.
