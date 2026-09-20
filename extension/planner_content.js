@@ -12,6 +12,9 @@
   // forgot every confirmed cell the moment the harness returned to type (E1-9, 8:51 PM: GUARD_REJECTED on cell 1).
   let confirmedSheetValues=new Set(),classificationQuestion='';
   const classifiedChoices=new WeakMap();
+  // The one blank a page may leave that the model is allowed to fill: pick-one vs pick-many for a candidate
+  // group. Held per container, applied only while the page text says nothing either way, dropped when refused.
+  const assertedModes=new WeakMap();
   const choiceReceipts=new WeakMap();
   const resultIcon='svg[data-testid="icon-check"],svg[data-testid="icon-close-x"],[data-testid="AssemblyAnimatedIcon--CSS"][aria-label="check"]';
   const sensitive=/credit.?card|card.?number|cvv|cvc|social.?security|ssn|iban|routing|account.?number/i;
@@ -53,15 +56,21 @@
     // owns the single open menu; anything else stays null (WRONG_MENU_OWNER).
     const expanded=cells.filter(c=>c.getAttribute('aria-expanded')==='true');
     return expanded.length===1?expanded[0]:null;}
-  function renderedText(root,exclude,choice=false){let parts=[],count=0,complete=true;const walk=n=>{if(++count>12000){complete=false;return}if(n.nodeType===3){if(norm(n.textContent))parts.push(n.textContent);return}if(n.nodeType!==1)return;
+  // On screen for a person, even when marked aria-hidden: Khan Academy's "Choose 1 answer:" legend and Quizlet's
+  // "Select all that apply" are visible instructions that screen readers are told to skip. Used only for the text
+  // that classifies a candidate group; shown() (which honours aria-hidden) still gates every target and hit test.
+  const onScreen=e=>!!e?.isConnected&&!e.closest('[hidden],script,style,template')&&getComputedStyle(e).visibility!=='hidden'&&getComputedStyle(e).display!=='none'&&!!e.getClientRects().length;
+  function renderedText(root,exclude,choice=false,visible=shown){let parts=[],count=0,complete=true;const walk=n=>{if(++count>12000){complete=false;return}if(n.nodeType===3){if(norm(n.textContent))parts.push(n.textContent);return}if(n.nodeType!==1)return;
     // aria-live announces changes, including whole questions; it is not evidence of feedback.
-    if(exclude.has(n)||!shown(n)||(!choice&&n.matches('button'))||n.matches(textExcluded)||n.matches(resultIcon)||liveFeedback(n))return;
+    if(exclude.has(n)||!visible(n)||(!choice&&n.matches('button'))||n.matches(textExcluded)||n.matches(resultIcon)||liveFeedback(n))return;
     if(n.matches('input,textarea,select'))return;for(const c of n.childNodes)walk(c);if(n.shadowRoot)for(const c of n.shadowRoot.childNodes)walk(c)};walk(root);return {text:norm(parts.join(' ')),complete};}
   function choiceLabel(e,container=null){let branch=e;while(container&&branch.parentElement&&branch.parentElement!==container)branch=branch.parentElement;const visible=renderedText(branch,new Set(),true).text,accessible=norm(e.getAttribute('aria-label')||e.getAttribute('title')||'');return visible&&accessible&&visible!==accessible&&!visible.includes(accessible)?accessible+' — '+visible:visible||accessible;}
   function discoverChoices(root,known){
     // A candidate is evidence, not permission to click. Never infer an answer group from the whole page.
-    const excluded=textExcluded+',aside,[role=toolbar],[role=tablist],[role=menu]';
-    const auxiliary=/^(?:show|hide|toggle)?\s*(?:hint|bookmark|sound|audio|mute|settings|help|favorite)\b/i;
+    // Page chrome never holds an answer: site header/footer/nav (Khan's share buttons sit in <header>, its exercise
+    // controls in the content footer, its breadcrumb in <nav>).
+    const excluded=textExcluded+',aside,header,footer,nav,[role=toolbar],[role=tablist],[role=menu],[role=navigation],[role=banner],[role=contentinfo]';
+    const auxiliary=/^(?:show|hide|toggle)?\s*(?:hint|bookmark|sound|audio|mute|settings|help|favorite|draw|start over|skip|report|share|flag)\b/i;
     const pool=all(root,'button,[role=button],[aria-pressed],[tabindex]').filter(e=>shown(e)&&safe(e)&&!e.matches('input,textarea,select,td,th,[role=gridcell],[role=tab],svg,canvas')&&!known.some(k=>k===e||k.contains(e))&&!e.closest(excluded)&&!forbidden.test(name(e))&&!navigationKind(name(e))&&!auxiliary.test(name(e))&&(e.tabIndex>=0||e.hasAttribute('aria-pressed')));
     const nodes=pool.slice(0,400);
     const leaves=nodes.filter(e=>!nodes.some(n=>n!==e&&e.contains(n))),byContainer=new Map();
@@ -80,10 +89,11 @@
     }
     const found=[...byContainer].map(([container,members])=>{
       const scope=container.closest('fieldset,[role=radiogroup],[role=group],article,[data-question-id]')||container.parentElement;
-      const text=renderedText(scope||container,new Set(members)).text;
+      const text=renderedText(scope||container,new Set(members),false,onScreen).text;
       const single=container.matches('[role=radiogroup]')||!!container.closest('[role=radiogroup]')||/\b(?:choose|select|pick)\s+(?:(?:the|a|an)\s+)?(?:one|1|single|(?:(?:correct|best)\s+)?answer)\b/i.test(text);
       const multiple=/\b(?:select|choose|check|pick)\s+(?:all|every|two|three|four|[2-9]|[1-9]\d+)\b|\b(?:multiple answers|more than one)\b/i.test(text);
-      const mode=single!==multiple?(multiple?'choice_set':'choice'):null;
+      const textMode=single!==multiple?(multiple?'choice_set':'choice'):null,asserted=!single&&!multiple?assertedModes.get(container)||null:null;
+      const mode=textMode||asserted,modeSource=textMode?'page_text':asserted?'model_assertion':null;
       const attribute=['aria-pressed','aria-checked','aria-selected'].find(a=>members.every(e=>['true','false'].includes(e.getAttribute(a))))||null;
       // Named answer containers with individually named option cards are an observable component
       // contract, independent of hostname and generated CSS. Its result must be on the exact card
@@ -93,7 +103,7 @@
       const labels=members.map(e=>choiceLabel(e,container)),unique=labels.every(Boolean)&&new Set(labels).size===labels.length;
       const signature=JSON.stringify({members:members.map(key),labels,mode,attribute,resultCards});
       const reason=!unique?'Answer labels are missing or repeated.':!mode?'Single or multiple selection is not established by the visible instructions.':!attribute&&!resultCards?'No supported selected-state readback; inspect the widget before answering.':'';
-      return {container,members,labels,mode,attribute,resultCards,signature,reason,scope:text,ready:!reason};
+      return {container,members,labels,mode,modeSource,attribute,resultCards,signature,reason,scope:text,ready:!reason};
     });
     found.complete=pool.length<=400;return found;
   }
@@ -373,7 +383,7 @@
       const kind=g.ready&&proof===signature&&!orphanedResult?g.mode:'unresolved';
       const current=g.attribute?g.members.flatMap((e,i)=>e.getAttribute(g.attribute)==='true'?[g.labels[i]]:[]):outcome?[receipt.label]:[];
       const s=add(g.container,kind,renderedText(g.container,new Set(g.members)).text||'Answer choices',g.labels,current);
-      s.interaction={adapter:'candidate_choices',evidence:{grouping:'repeated_siblings',selection_mode:g.mode,state_attribute:g.attribute,verification:g.resultCards?'result_icon':'state_attribute',reason:orphanedResult?'Feedback is already present without a trusted execution receipt.':g.reason,ready:g.ready&&!orphanedResult},candidate_ids:g.members.map(target)};
+      s.interaction={adapter:'candidate_choices',evidence:{grouping:'repeated_siblings',selection_mode:g.mode,selection_mode_source:g.modeSource,state_attribute:g.attribute,verification:g.resultCards?'result_icon':'state_attribute',reason:orphanedResult?'Feedback is already present without a trusted execution receipt.':g.reason,ready:g.ready&&!orphanedResult},candidate_ids:g.members.map(target)};
       s.choices=g.members.map((e,i)=>({label:g.labels[i],target:target(e),checked:current.includes(g.labels[i]),disabled:!!e.disabled||e.getAttribute('aria-disabled')==='true'}));
       s.disabled=s.choices.every(c=>c.disabled);s.discoverySignature=signature;
       s.result_feedback=!!(g.resultCards&&g.container.querySelector(resultIcon));
@@ -413,12 +423,19 @@
       return {ok:true};
     }
     if(m.operation==='classify_choices'){
-      // Re-extract the group in the trusted inspector; model text is never classification authority.
+      // Re-extract the group in the trusted inspector; model text is never classification authority -- with one
+      // exception it may only fill, never override: pick-one vs pick-many when the page says nothing either way
+      // (Khan's stem: a question and four lettered choices). The assertion is applied through the same
+      // re-extraction, takes effect only while the page text is silent, and is dropped when it did not promote.
+      const requested=['choice','choice_set'].includes(m.selection_mode)?m.selection_mode:'';
+      if(requested)assertedModes.set(e,requested);
       const prior=last;observe();const fresh=last;last=prior;
       const s=fresh.slots.find(s=>s.target===m.target&&s.interaction?.adapter==='candidate_choices');
-      if(!s||fresh.targets.get(s.target)!==e)return fail('TARGET_STALE','Choice candidates changed during inspection.');
-      if(s.interaction.evidence.ready)classifiedChoices.set(e,s.discoverySignature);
-      return {ok:true,promoted:!!s.interaction.evidence.ready,evidence:s.interaction.evidence,options:s.options};
+      if(!s||fresh.targets.get(s.target)!==e){assertedModes.delete(e);return fail('TARGET_STALE','Choice candidates changed during inspection.');}
+      const ev=s.interaction.evidence,accepted=ev.selection_mode_source==='model_assertion'&&ev.ready;
+      if(requested&&!accepted)assertedModes.delete(e);
+      if(ev.ready)classifiedChoices.set(e,s.discoverySignature);
+      return {ok:true,promoted:!!ev.ready,evidence:ev,options:s.options,...(requested?{asserted_mode:requested,accepted}:{})};
     }
     if(m.expected_menu_owner){const owners=last.slots.filter(s=>s.kind==='selection'),cells=owners.map(s=>last.targets.get(s.target)),cell=owner(e,cells);
       // The owning cell is named by its RECORDED slot key -- the one spelling every other check uses (it carries the

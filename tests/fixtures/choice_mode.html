@@ -1,0 +1,38 @@
+<!doctype html><meta charset="utf-8"><title>Choice group whose instruction the page hides from screen readers</title>
+<style>body{font:16px sans-serif;margin:0}header,nav,#controls{padding:8px;background:#eee}main{padding:12px}button{display:block;padding:10px;margin:4px;min-width:320px;text-align:left;border:1px solid}li{list-style:none}fieldset{border:0;padding:0}legend{font-weight:bold}</style>
+<!-- The live Khan Academy exercise shape (read from the page on 2026-09-20): the answer group is a list of
+     aria-pressed buttons named "(Choice A)".. inside a fieldset whose legend "Choose 1 answer:" is visible on
+     screen but carries aria-hidden="true"; share buttons live in <header>, the breadcrumb in <nav>, and the
+     exercise controls (Draw on exercise / Start over / Skip / Check) in a plain div. ?mode=
+       legend  -- the aria-hidden legend is present (the live page)
+       none    -- no instruction at all: the page says neither pick-one nor pick-many
+       hidden  -- the legend exists but is display:none: genuinely not on screen
+       all     -- the legend reads "Select all that apply" (multi-select), also aria-hidden
+     Pressing a choice sets aria-pressed; in single modes the other choices are un-pressed (radio behaviour),
+     in "all" they are independent. `clicks` records every choice click. -->
+<header><button id="share" aria-label="Share link">Share</button><button id="teams" aria-label="Share to Microsoft Teams (Opens in a new window)">Teams</button></header>
+<nav aria-label="breadcrumb"><span tabindex="0">Course: AP Macroeconomics</span><span tabindex="0">Unit 6</span></nav>
+<main data-question-id="choice-mode">
+<form><fieldset>
+<legend id="legend" aria-hidden="true">Choose 1 answer:</legend>
+<p>The currency of Ghana is the cedi, and the currency of the United States is the dollar. If the exchange rate changes from 5 to 8 cedis per dollar, what will be the effect on net exports and employment in the United States?</p>
+<ul role="list">
+<li><button type="button" aria-pressed="false" aria-label="(Choice A)">Net exports and employment will decrease.</button></li>
+<li><button type="button" aria-pressed="false" aria-label="(Choice B)">Net exports will increase, but employment will be unaffected.</button></li>
+<li><button type="button" aria-pressed="false" aria-label="(Choice C)">Net exports will decrease, but employment will be unaffected.</button></li>
+<li><button type="button" aria-pressed="false" aria-label="(Choice D)">Net exports and employment will increase.</button></li>
+</ul>
+</fieldset></form>
+<div id="controls"><button type="button" aria-label="Draw on exercise">Draw</button><button type="button" aria-label="Start over">Start over</button><button type="button">Skip</button><button type="button">Check</button></div>
+</main>
+<script>
+const mode=new URLSearchParams(location.search).get('mode')||'legend';window.clicks=[];
+const legend=document.getElementById('legend');
+if(mode==='none')legend.remove();
+if(mode==='hidden')legend.style.display='none';
+if(mode==='all')legend.textContent='Select all that apply:';
+const choices=[...document.querySelectorAll('ul[role=list] button')];
+for(const b of choices)b.onclick=()=>{window.clicks.push(b.getAttribute('aria-label'));const on=b.getAttribute('aria-pressed')!=='true';
+  if(mode!=='all')for(const o of choices)o.setAttribute('aria-pressed','false');
+  b.setAttribute('aria-pressed',on?'true':'false')};
+</script>
