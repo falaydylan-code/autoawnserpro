@@ -547,3 +547,15 @@ def test_blank_is_a_legal_answer_exactly_when_the_page_offers_a_blank_choice():
  with pytest.raises(ValueError,match='blank is not an offered choice'):planner.validate_context(plan(''),o)   # row 6 has no blank entry
  with pytest.raises(ValueError,match='blank is not an offered choice'):planner.validate_context(plan('   '),o)
  assert 'label "" when "" is among its offered choices' in planner.PLANNER_PROMPT
+
+
+def test_selection_mode_rides_only_on_classify_choices():
+    # The model's pick-one/pick-many reading is carried on the classify request and nowhere else; the page-side
+    # classifier decides whether it applies. Any other use is a schema error, never a silent no-op.
+    o=obs();o['slots'][0]['interaction']={'adapter':'candidate_choices','evidence':{'state_attribute':'aria-pressed','ready':False}}
+    good=planner.parse_plan(raw(kind='request_inspection',tasks=[],inspection={'slot_key':'q/a','question':'One answer is asked for','requests':['classify_choices'],'selection_mode':'choice'}))
+    assert planner.validate_context(good,o).inspection.selection_mode=='choice'
+    with pytest.raises(ValueError,match='SCHEMA_INVALID'):
+        planner.parse_plan(raw(kind='request_inspection',tasks=[],inspection={'slot_key':'q/a','question':'x','requests':['classify_choices'],'selection_mode':'radio'}))
+    stray=planner.parse_plan(raw(kind='request_inspection',tasks=[],inspection={'slot_key':'q/a','question':'x','requests':['inspect_slot'],'selection_mode':'choice'}))
+    with pytest.raises(ValueError,match='selection_mode is only meaningful with classify_choices'):planner.validate_context(stray,o)

@@ -660,8 +660,10 @@
         }else{
         for(const op of req.requests){if(!['inspect_frame','inspect_slot','inspect_options','read_control_state','measure_target','inspect_svg_geometry','inspect_scroll_container','classify_choices'].includes(op))throw new Fault('GUARD_REJECTED','Unknown inspection.');
           let fresh=await this.observe(),s=this.slot(fresh,req.slot_key);
-          const result=op==='inspect_options'?(s.kind==='selection'?await this.selectionOptions(s.slot_key,true):s.choices?.map(c=>({label:c.label,disabled:c.disabled}))):await this.inspect(s.frame,s.target,op);
+          const result=op==='inspect_options'?(s.kind==='selection'?await this.selectionOptions(s.slot_key,true):s.choices?.map(c=>({label:c.label,disabled:c.disabled}))):await this.inspect(s.frame,s.target,op,op==='classify_choices'&&req.selection_mode?{selection_mode:req.selection_mode}:{});
           evidence.push({slot_key:s.slot_key,operation:op,result});
+          // The one judgment the model may supply is written to the log as such, accepted or not.
+          if(op==='classify_choices'&&result?.asserted_mode)await this.event('INSPECT',result.accepted?`Model read this group as ${result.asserted_mode==='choice'?'pick one':'pick many'}; accepted because the page text says neither`:`Model read this group as ${result.asserted_mode==='choice'?'pick one':'pick many'}; not accepted`,{slot_key:s.slot_key,adapter:'candidate_choices',asserted_mode:result.asserted_mode,accepted:!!result.accepted,actual:result.evidence,action_executed:false});
         }
         }
       }
@@ -757,7 +759,9 @@
         let complete=false;
         while(!complete){await this.guard();await this.event('EXECUTE',`Entering ${count+1} of ${tasks.length}`,{slot_key:task.slot_key,task_id:task.task_id,adapter:task.operation,requested_value:task.desired});
           try{const result=await this.execute(task);this.current.completed[task.slot_key]={entry_verified:true,action_executed:!result.skipped,actual:result.s.current,save_state:result.obs.save_state,grade_state:result.obs.grade_state,document_id:result.obs.document_id};this.current.recovery.progress();complete=true;count++;
-            await this.event('VERIFY',`${count} of ${tasks.length} answers verified`,{slot_key:task.slot_key,actual:result.s.current,entry_verified:true});this.b.progress(count,tasks.length,Object.keys(this.ledger.questions).length,this.ledger.cost,this.steps);
+            // A pick-one/pick-many group whose mode came from the model, not the page, says so here: the readback
+            // proved what is selected, not that the question wanted that many.
+            await this.event('VERIFY',`${count} of ${tasks.length} answers verified`,{slot_key:task.slot_key,actual:result.s.current,entry_verified:true,...(result.s.interaction?.evidence?.selection_mode_source==='model_assertion'?{cardinality:'asserted by the model; verified by selected-state readback only'}:{})});this.b.progress(count,tasks.length,Object.keys(this.ledger.questions).length,this.ledger.cost,this.steps);
           }catch(e){if(!(e instanceof Fault))throw e;if(['CANCELLED','TARGET_STALE','BUDGET_EXHAUSTED','GEOMETRY_UNCALIBRATED','FRAME_UNREADABLE'].includes(e.code))throw e;
             const partId=this.current?.slot_parts?.[task.slot_key];const fresh=partId?await this.showPart(null,partId):await this.observe(),s=this.slot(fresh,task.slot_key);let local=false;try{local=this.current.recovery.failure(task,e,{current:s.current,options:s.frame.menus.filter(m=>m.owner===s.local_slot).map(m=>m.label)})}finally{await this.persist()}
             if(local&&['TARGET_MISSING','INPUT_NO_EFFECT','VALUE_MISMATCH','WRONG_MENU_OWNER'].includes(e.code)){await this.event('LOCAL_RECOVERY','Re-observing the failed widget: '+e.message,{failure_code:e.code,...(e.actual!=null?{actual:e.actual}:{})});continue}

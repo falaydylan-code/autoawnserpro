@@ -53,6 +53,10 @@ class Inspection(Strict):
     # untrusted data; the backend only carries the string. Extraction only --
     # answers are still entered through the gated typed tasks.
     script: str = Field(default='',max_length=4000)
+    # With classify_choices only: the model's reading of pick-one vs pick-many for a candidate group whose page
+    # text says neither. The page-side classifier applies it only while the text is silent and a selected-state
+    # readback exists; the executor still verifies exactly what ended up selected.
+    selection_mode: Literal['','choice','choice_set'] = ''
 class PlannerResponse(Strict):
     kind: Literal['plan','request_inspection','needs_review']
     question_key: str = Field(min_length=1,max_length=600)
@@ -137,11 +141,14 @@ class RepairRequest(PlanRequest):
 
 PLANNER_PROMPT = '''Solve one sufficiently observed question. Return exactly one JSON object and no other text.
 Candidate choice groups are offered as unresolved slots with their full visible options. Supported groups
-are classified before planning. classify_choices on the exact slot_key only re-reads current DOM evidence;
-repeating it cannot supply absent selection semantics or selected-state readback. If evidence.ready is false
+are classified before planning. classify_choices on the exact slot_key re-reads current DOM evidence; repeating
+it cannot supply absent selected-state readback. One gap you may fill: when evidence.reason says single or
+multiple selection is not established, send classify_choices with selection_mode "choice" (one answer) or
+"choice_set" (several), from the question wording and the choices. It is accepted only while the page text
+says neither, and the harness still verifies exactly what ends up selected. If evidence.ready stays false
 and there is no specific new evidence to inspect, return needs_review instead of repeating discovery.
 This read-only inspection can register a typed answer slot only when trusted DOM evidence now supports it.
-Never treat a candidate as clickable, assume single/multiple selection from aria-pressed, or treat an
+Never treat a candidate as clickable, infer selection semantics from aria-pressed alone, or treat an
 unresolved control as locked. Inspect the reason in interaction.evidence; missing state readback requires
 needs_review unless fresh DOM evidence supports a packaged adapter. Do not propose arbitrary selectors.
 Inspection evidence is scoped to this question/document; current slot state supersedes older inspection state.
@@ -318,6 +325,8 @@ def validate_context(response, observation, failed=None):
             raise InspectionTargetError(i.slot_key)
         if 'classify_choices' in i.requests and (slots[i.slot_key].get('interaction') or {}).get('adapter')!='candidate_choices':
             raise InspectionTargetError(i.slot_key)
+        if i.selection_mode and 'classify_choices' not in i.requests:
+            raise ValueError('SCHEMA_INVALID: selection_mode is only meaningful with classify_choices. Nothing was done.')
         return response
     if response.kind!='plan':return response
     if not observation['completeness']['complete']:raise ValueError('QUESTION_INCOMPLETE: obtain missing evidence first.')
