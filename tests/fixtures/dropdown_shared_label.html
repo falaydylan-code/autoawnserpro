@@ -1,0 +1,44 @@
+<!doctype html><meta charset="utf-8"><title>Dropdown cells sharing one arrow whose label mirrors the active cell</title>
+<style>body{font:16px sans-serif;margin:20px}td{border:1px solid;padding:6px;min-width:220px;height:23px;position:relative}table{border-collapse:collapse}ul{position:absolute;background:white;border:1px solid;z-index:5;list-style:none;padding:0;margin:0}li{padding:8px;cursor:pointer}.dropdownButton{position:absolute;width:20px;height:21px}</style>
+<!-- Three dropdown cells of a statement (the live M3-9 shape): a section header already showing "Revenues", an
+     account row under it, and a second section header. ONE shared arrow (title "Show All Items") is laid over the
+     ACTIVE cell, and its aria-label copies the active cell's accessible name. McGraw names the active cell after
+     the header above it, so once the header reads "Revenues" the arrow's label "Revenues" matches two cells: the
+     header (by its text) and the active cell (by its aria-label). ?mode=
+       shared   -- the active cell carries aria-label "Revenues" (what the 1:20 PM log shows): the label is shared
+                   WITH this cell, geometry must decide, and both empty cells must be filled
+       foreign  -- the active cell carries no aria-label, so the arrow's label names the header alone: a button
+                   over this cell labelled uniquely for ANOTHER cell must be refused, never clicked
+       excludes -- like foreign, plus a stale aria-label "Revenues" left on the account row: the label matches two
+                   OTHER cells and not this one; refused
+     `clicks` records every arrow click so a test can prove a refused arrow was left alone. -->
+<main data-question-id="shared-label">
+  <h1>Prepare the statement.</h1>
+  <table class="statement"><tr><td>BILL'S EXTREME BOWLING</td></tr>
+  <tr><td id="sec1" class="dropDownList colHeader responseCell" tabindex="0"><span class="dropdownValue">Revenues</span></td></tr>
+  <tr><td id="row_a" class="dropDownList rowHeader responseCell" tabindex="0"><span class="dropdownValue"></span></td></tr>
+  <tr><td id="sec2" class="dropDownList colHeader responseCell" tabindex="0"><span class="dropdownValue"></span></td></tr>
+  </table>
+</main>
+<script>
+const mode=new URLSearchParams(location.search).get('mode')||'shared';window.clicks=[];window.opens=0;
+const cells=[...document.querySelectorAll('td.responseCell')];let arrow=null,active=null;
+if(mode==='excludes')document.getElementById('row_a').setAttribute('aria-label','Revenues');   // a name left behind on a cell that was active earlier
+function headerAbove(cell){let r=cell.parentElement.previousElementSibling;while(r){const t=r.querySelector('td.colHeader .dropdownValue')?.textContent.trim();if(t)return t;r=r.previousElementSibling}return ''}
+function openMenu(){window.opens++;document.getElementById('menu')?.remove();const menu=document.createElement('ul');menu.id='menu';menu.setAttribute('role','listbox');menu.setAttribute('aria-labelledby',active.id);
+  const box=active.getBoundingClientRect();menu.style.cssText=`left:${box.x+scrollX}px;top:${box.bottom+scrollY}px;width:${box.width}px`;active.setAttribute('aria-expanded','true');
+  for(const label of ['','Revenues','Expenses','Service Revenue']){const li=document.createElement('li');li.setAttribute('role','option');li.textContent=label;const cell=active;li.onclick=()=>{cell.querySelector('span').textContent=label;menu.remove();cell.setAttribute('aria-expanded','false')};menu.append(li)}
+  document.body.append(menu)}
+for(const cell of cells)cell.onclick=()=>{
+  if(cell.classList.contains('jSheetCellActive'))return;
+  for(const c of cells){c.classList.remove('jSheetCellActive');c.removeAttribute('role');c.setAttribute('aria-expanded','false')}
+  document.getElementById('menu')?.remove();arrow?.remove();arrow=null;
+  active=cell;cell.classList.add('jSheetCellActive');cell.setAttribute('role','combobox');cell.focus();
+  const named=headerAbove(cell);                                  // the active cell is named after the header above it
+  if(mode==='shared')cell.setAttribute('aria-label',named);
+  setTimeout(()=>{arrow=document.createElement('input');arrow.type='button';arrow.className='dropdownButton';arrow.title='Show All Items';arrow.setAttribute('aria-label',named);
+    const box=cell.getBoundingClientRect();arrow.style.left=(box.right-22+scrollX)+'px';arrow.style.top=(box.y+1+scrollY)+'px';
+    arrow.onclick=e=>{e.stopPropagation();window.clicks.push(cell.id);openMenu()};document.body.append(arrow)},100)
+};
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){document.getElementById('menu')?.remove();active?.setAttribute('aria-expanded','false')}});   // the live menu closes on Escape too
+</script>

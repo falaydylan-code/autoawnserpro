@@ -94,7 +94,10 @@
   }
   function openingControls(e,cells,register){
     if(e.tagName==='SELECT')return {status:'native',candidates:[]};
-    const candidates=[];
+    const candidates=[],rejected=[];
+    // Every EXPLICIT opener that is not accepted for this cell is recorded with why, so a run that stops with no
+    // opener says what it saw instead of leaving it to inference (M3-9, 1:23 PM: candidates:[] and nothing else).
+    const refuse=(n,why,extra={})=>{if(rejected.length<8)rejected.push({label:name(n).slice(0,80),title:(n.getAttribute('title')||'').slice(0,40),why,...extra,...rect(n)})};
     // A text editor is not an expand button. Detached buttons must have
     // ownership evidence, not just be the nearest clickable element.
     for(const n of all(document,'.dropdownButton,button,input[type=button],[role=button],[aria-haspopup]')){
@@ -102,37 +105,43 @@
       const isButton=n.matches('.dropdownButton,button,input[type=button],[role=button]');
       const explicit=n.matches('.dropdownButton')||['true','listbox'].includes(n.getAttribute('aria-haspopup'))||/^(?:show all items|open(?: options| menu| dropdown)?|expand(?: options| menu| dropdown)?)$/i.test(n.getAttribute('title')||name(n));
       if(!explicit)continue;
-      const containing=cells.filter(c=>c.contains(n));let evidence='';
-      if(containing.length){if(containing.length!==1||containing[0]!==e)continue;evidence='contained_opening_control';}
+      const containing=cells.filter(c=>c.contains(n));let evidence='',shared='';
+      if(containing.length){if(containing.length!==1||containing[0]!==e){refuse(n,'contained_in_another_cell',{cells:containing.map(key)});continue}evidence='contained_opening_control';}
       else {
         const ids=(n.getAttribute('aria-controls')||'').split(/\s+/);
         const direct=cells.filter(c=>c.id&&ids.includes(c.id));
-        if(direct.length){if(direct.length!==1||direct[0]!==e)continue;evidence='controls_slot';}
+        if(direct.length){if(direct.length!==1||direct[0]!==e){refuse(n,'controls_another_cell',{cells:direct.map(key)});continue}evidence='controls_slot';}
         else {
           const linked=ids.map(id=>document.getElementById(id)).filter(m=>m?.matches('[role=listbox]'));
           const owners=linked.map(m=>owner(m.querySelector('[role=option]'),cells)).filter(Boolean);
-          if(owners.length){if(owners.some(c=>c!==e))continue;evidence='associated_menu';}
+          if(owners.length){if(owners.some(c=>c!==e)){refuse(n,'menu_owned_by_another_cell',{cells:owners.map(key)});continue}evidence='associated_menu';}
           else {
             const label=norm(n.getAttribute('aria-label')),matches=cells.filter(c=>label&&norm(c.getAttribute('aria-label')||name(c))===label);
             const a=n.getBoundingClientRect(),b=e.getBoundingClientRect(),x=a.x+a.width/2,y=a.y+a.height/2;
             const inside=x>=b.left&&x<=b.right&&y>=b.top&&y<=b.bottom;
-            if(!isButton||!inside)continue;
+            if(!isButton||!inside){refuse(n,!isButton?'not_a_button':'outside_this_cell',{matches:matches.map(key)});continue}
             if(matches.length===1&&matches[0]===e)evidence='unique_slot_label_and_overlay_geometry';
+            // A label that names a DIFFERENT cell, or a set of cells that leaves this one out, contradicts the
+            // geometry: refuse rather than guess. That is the only label result that vetoes a button.
+            else if(matches.length&&!matches.includes(e)){refuse(n,matches.length===1?'label_names_another_cell':'label_excludes_this_cell',{matches:matches.map(key)});continue}
             else {
-              // No usable label (a statement's title-row dropdown has none): the button's center lies inside THIS
-              // cell's box and inside no other cell's. Weaker than a label match, so the runtime tries it only
-              // after explicit evidence, and still proves the opened menu belongs to this cell before choosing.
-              if(matches.length||cells.some(c=>c!==e&&(()=>{const r=c.getBoundingClientRect();return x>=r.left&&x<=r.right&&y>=r.top&&y<=r.bottom})()))continue;
-              evidence='overlay_geometry';
+              // No usable label (a statement's title-row dropdown has none), or a label SHARED by this cell and
+              // others (the active cell is named after the header above it, and that header's own text becomes the
+              // same word once filled -- M3-9's "Revenues"): the button's center lies inside THIS cell's box and
+              // inside no other cell's. Weaker than a unique label match, so the runtime tries it only after explicit
+              // evidence, and still proves the opened menu belongs to this cell before choosing.
+              const other=cells.find(c=>c!==e&&(()=>{const r=c.getBoundingClientRect();return x>=r.left&&x<=r.right&&y>=r.top&&y<=r.bottom})());
+              if(other){refuse(n,'inside_another_cell',{cells:[key(other)],matches:matches.map(key)});continue}
+              evidence='overlay_geometry';if(matches.length)shared=label;
             }
           }
         }
       }
-      candidates.push({target:register(n),label:name(n),title:n.getAttribute('title')||'',tag:n.tagName,type:n.getAttribute('type'),evidence,disabled:!!n.disabled||n.getAttribute('aria-disabled')==='true',...rect(n)});
+      candidates.push({target:register(n),label:name(n),title:n.getAttribute('title')||'',tag:n.tagName,type:n.getAttribute('type'),evidence,...(shared?{shared_label:shared}:{}),disabled:!!n.disabled||n.getAttribute('aria-disabled')==='true',...rect(n)});
     }
     // Explicit evidence outranks geometry: when both exist only the explicit candidates decide the status.
     const explicitOnes=candidates.filter(c=>c.evidence!=='overlay_geometry'),ranked=explicitOnes.length?explicitOnes:candidates;
-    return {status:ranked.length===1?'resolved':ranked.length?'ambiguous':'missing',candidates:ranked,geometry_only:!explicitOnes.length&&ranked.length===1};
+    return {status:ranked.length===1?'resolved':ranked.length?'ambiguous':'missing',candidates:ranked,geometry_only:!explicitOnes.length&&ranked.length===1,...(rejected.length?{rejected}:{})};
   }
   function sheetCell(e){return e.matches('td.responseCell.response')&&!!e.closest('table.jSheet')&&!!e.closest('.jSheetParent')?.querySelector('textarea.jSheetControls_formula');}
   function interaction(e,cells,register,memoryKey){
