@@ -1,0 +1,31 @@
+<!doctype html><meta charset="utf-8"><title>Structural choice discovery</title>
+<style>button,section[tabindex]{display:block;padding:12px;margin:5px;border:1px solid;min-width:220px}fieldset{margin:10px}</style>
+<main><article aria-live="polite"><h1>How is power distributed?</h1>
+<p id="instructions">Choose one answer.</p>
+<div id="answers"><ul id="first">
+<li><button aria-pressed="false" aria-label="(Choice A)">Power is central.</button></li>
+<li><button aria-pressed="false" aria-label="(Choice B)">Power is shared.</button></li>
+<li><button aria-pressed="false" aria-label="(Choice C)">Power is local.</button></li>
+</ul></div>
+</article>
+<aside role="toolbar"><button id="hint" aria-pressed="false">Show hint</button><button id="bookmark" aria-pressed="false">Bookmark question</button></aside>
+<button id="next" aria-pressed="false">Next</button>
+<div role="status" aria-live="polite" class="feedback">Saved</div>
+</main>
+<script>
+window.clicks=[];
+const mode=new URLSearchParams(location.search).get('mode');
+if(mode==='multiple')instructions.textContent='Select all that apply.';
+if(mode==='ambiguous')instructions.textContent='Respond to the question.';
+if(mode==='two'){
+ const field=document.createElement('fieldset');field.innerHTML='<legend>Choose one answer for the second part.</legend><ul id="second"><li><button aria-pressed="false">North</button></li><li><button aria-pressed="false">South</button></li></ul>';answers.after(field);
+}
+if(mode==='cards')for(const b of first.querySelectorAll('button')){const card=document.createElement('section');card.tabIndex=0;card.textContent=b.textContent;b.replaceWith(card)}
+for(const b of document.querySelectorAll('button,section[tabindex]'))b.onclick=()=>{
+ window.clicks.push(b.id||b.textContent);
+ if(!b.closest('ul')||!b.hasAttribute('aria-pressed'))return;
+ const was=b.getAttribute('aria-pressed')==='true';
+ if(mode!=='multiple')for(const other of b.closest('ul').querySelectorAll('button'))other.setAttribute('aria-pressed','false');
+ b.setAttribute('aria-pressed',String(mode==='multiple'?!was:true));
+};
+</script>

@@ -446,10 +446,10 @@ async def capabilities(protocol: int = 3):
     # falls back to the protocol-3 default rather than 422-ing the negotiation,
     # so the planner's `?protocol=4` request actually returns protocol 4.
     protocol = protocol if protocol in (3, 4) else 3
-    return {'protocol': protocol, 'extension': '0.10.37', 'supported_protocols': [3,4], 'request_wait_seconds': planner.REQUEST_DEADLINE_MAX,
+    return {'protocol': protocol, 'extension': '0.10.38', 'supported_protocols': [3,4], 'request_wait_seconds': planner.REQUEST_DEADLINE_MAX,
             'planner_release': 'preview', 'planner_output_tokens': planner.call_limits({}),
             'features': ['parts', 'ordering', 'visual_input', 'visual_verification', 'browser_input', 'page_states', 'no_step_ceiling',
-                         'task_plans', 'scoped_observations', 'stable_slots', 'typed_verification', 'bounded_repair', 'geometry_inspection', 'frame_scoped_inspection','interaction_classification']}
+                         'task_plans', 'scoped_observations', 'stable_slots', 'typed_verification', 'bounded_repair', 'geometry_inspection', 'frame_scoped_inspection','interaction_classification','choice_discovery','bounded_format_correction']}
 
 
 async def planner_endpoint(body, request, who, repair=False, visual=False, verify=False):
@@ -488,7 +488,7 @@ async def planner_endpoint(body, request, who, repair=False, visual=False, verif
     record['output_format']=output_format['type'] if output_format else 'prompt_json';record['reasoning']=reasoning
     async def transport(messages,max_tokens):
         return await agent.planner_complete(owner_key,messages,selected,record,max_tokens+thinking,
-            dict(run_id=body.run_id,request_id=body.request_id,question=observation['question_key'],phase='verify' if verify else 'visual' if visual else 'inspection_correction' if body.inspection_target_correction else 'repair' if repair else 'plan',cap=body.spend_limit,amount=amount,budget_owner=budget_key(who,request)),price_limit={'prompt':inp*1e6,'completion':out*1e6,'request':fee,'image':0,'audio':0},output_format=output_format,reasoning=reasoning,avoid_providers=body.avoid_providers,deadline=planner.request_deadline(max_tokens+thinking))
+            dict(run_id=body.run_id,request_id=body.request_id,question=observation['question_key'],phase='verify' if verify else 'visual' if visual else 'format_correction' if body.format_correction else 'inspection_correction' if body.inspection_target_correction else 'repair' if repair else 'plan',cap=body.spend_limit,amount=amount,budget_owner=budget_key(who,request)),price_limit={'prompt':inp*1e6,'completion':out*1e6,'request':fee,'image':0,'audio':0},output_format=output_format,reasoning=reasoning,avoid_providers=body.avoid_providers,deadline=planner.request_deadline(max_tokens+thinking))
     try:
         if verify:
             answer=await planner.request_verify(body,transport)
@@ -500,6 +500,7 @@ async def planner_endpoint(body, request, who, repair=False, visual=False, verif
             context={'task':body.task.model_dump(),'failure':body.failure,'completed_slots':body.completed_slots,'history':body.history} if repair else None)
     except ValueError as exc:
         correction={'inspection_correction':exc.correction} if isinstance(exc,planner.InspectionTargetError) else {}
+        if isinstance(exc,planner.InvalidJsonError):correction['format_correction']={'kind':'invalid_json'}
         return JSONResponse(status_code=400,content={'detail':str(exc),**record,**correction})
     return {'response':answer.model_dump(),'phase':'verify' if verify else 'visual' if visual else 'repair' if repair else 'plan','reservation':amount,**record}
 

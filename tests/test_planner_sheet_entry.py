@@ -69,11 +69,12 @@ def test_amounts_compare_as_numbers_only_when_both_sides_are_amounts(extension):
     assert cases == [True, True, True, True, True, False, False, False, True, '91300', '-1200', 'Cash', None, 123]
 
 
-def test_a_cell_that_stays_locked_is_left_out_of_the_plan_and_named_at_the_finish(extension):
-    """M3-9 (2:19 PM): two amount cells could not be clicked -- the harness read them as unresolved, correctly -- but the
-    rules then made the question unplannable (a plan had to cover every slot, and never an unresolved one). Now a
-    still-unresolved slot is not required; the run finishes and says which locations stayed locked."""
+def test_unresolved_cell_is_not_falsely_reported_locked_or_finished(extension):
+    """An unrecognized control may permit the known entries, but cannot prove the question finished.
+    This fixture ignores input without publishing a disabled/readonly state; that is missing evidence, not a lock."""
     page, w, tid = navigate(extension, 'sheet_numeric.html?locked=forever')
+    # Remove only this cell from the recognized sheet contract. It remains a truly unknown widget.
+    page.locator('#ret').evaluate("e=>{const t=document.createElement('table');document.querySelector('main').append(t);t.append(e.closest('tr'))}")
     result = w.evaluate('''async ({id,values})=>{const h=__assignmentHarness;await AssignmentVisual.attach(id);
       const bridge=h.plannerBridge();bridge.config=async()=>({advance:false,auto_submit:false,spend_limit:2,model:'test'});
       globalThis.planBodies=[];
@@ -85,11 +86,11 @@ def test_a_cell_that_stays_locked_is_left_out_of_the_plan_and_named_at_the_finis
       const engine=new AssignmentPlanner.Engine(bridge,id,await bridge.config());const r=await engine.run();
       return {status:r.status,events:r.events.map(e=>({phase:e.phase,detail:e.detail,not_answerable:e.not_answerable||null})),bodies:globalThis.planBodies};}''',
       {'id': tid, 'values': {'Total Revenues': '139000', 'Operating Expenses': '91300', 'Net Income': '47700'}})
-    assert result['status'] == 'finished', result['events'][-3:]
+    assert result['status'] == 'needs_review', result['events'][-3:]
     shown = result['bodies'][0]['slots']
     assert [s['kind'] for s in shown if 'Retained' in s['label']] == ['unresolved']          # the model still sees it, marked
-    finish = next(e for e in result['events'] if e['phase'] == 'FINISH')
-    assert finish['not_answerable'] == ['Retained Earnings'] and 'stayed locked' in finish['detail']
+    assert not any(e['phase']=='FINISH' for e in result['events'])
+    assert any('not proven locked' in e['detail'] for e in result['events'])
     assert [c['raw'] for c in page.evaluate('commits')] == ['139000', '91300', '47700']
     assert page.locator('#ret').inner_text() == ''
 

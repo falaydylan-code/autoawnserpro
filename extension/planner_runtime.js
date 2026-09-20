@@ -126,8 +126,8 @@
       // excluded, the question may have lived in the excluded frame: say so
       // explicitly rather than planning on a partial view.
       if(!slots.length&&excluded)throw new Fault('FRAME_UNREADABLE','A frame that may hold the question could not be read (cross-site, ambiguous, or unresponsive); its contents were excluded.');
-      let table_context_complete=used.every(f=>f.table_context_complete!==false),tableBytes=0;const tables=[];
-      for(const f of used)for(const t of f.tables||[]){const item={...t,frame_id:f.frame_id},size=JSON.stringify(item).length;
+      let table_context_complete=frames.every(f=>f.table_context_complete!==false),tableBytes=0;const tables=[];
+      for(const f of [...used,...frames.filter(f=>!used.includes(f))])for(const t of f.tables||[]){const item={...t,frame_id:f.frame_id},size=JSON.stringify(item).length;
         if(tables.length>=12||tableBytes+size>60000){table_context_complete=false;continue}tables.push(item);tableBytes+=size;}
       // The question TEXT comes from EVERY observed frame, not only the frames that
       // hold answer cells. Courseware routinely puts the stem/instructions in the
@@ -137,10 +137,10 @@
       // hashes the slot frames only, so the key stays stable. Frames are in BFS
       // order so the stem leads; deduped so a single-frame page repeats nothing;
       // bounded under the backend's question limit.
-      const questionText=[...new Set(frames.map(f=>f.question).filter(Boolean))].join('\n').slice(0,60000);
+      const fullQuestionText=[...new Set(frames.map(f=>f.question).filter(Boolean))].join('\n'),questionText=fullQuestionText.slice(0,60000);
       const parts=frames.flatMap(f=>(f.parts||[]).map(p=>({...p,frame_id:f.frame_id,frame:f})));
-      const obs={question_key,document_id,observation_id:crypto.randomUUID(),question:questionText,tables,table_context_complete,slots,frames,parts,
-        completeness:{complete:slots.length<=100&&frames.every(f=>f.completeness.complete),note:(slots.length>100?'More than 100 answer slots; narrow the question scope. ':'')+frames.map(f=>f.completeness.note).filter(Boolean).join('; ')},
+      const obs={question_key,document_id,observation_id:crypto.randomUUID(),question:questionText,tables,table_context_complete,slots,frames,parts,discovery_complete:frames.every(f=>f.discovery_complete!==false),
+        completeness:{complete:fullQuestionText.length<=60000&&slots.length<=100&&frames.every(f=>f.completeness.complete),note:(fullQuestionText.length>60000?'Question context exceeds 60000 characters; missing context must be recovered. ':'')+(slots.length>100?'More than 100 answer slots; narrow the question scope. ':'')+frames.map(f=>f.completeness.note).filter(Boolean).join('; ')},
         enumeration:frames.find(f=>f.enumeration)?.enumeration||null,
         page_state:frames.find(f=>f.page_state!=='answering')?.page_state||'answering',host:frames[0].host,
         navigation:frames.flatMap(f=>f.navigation.map(n=>({...n,frame:f}))),feedback:frames.map(f=>f.feedback).filter(Boolean).join('; '),
@@ -262,6 +262,7 @@
       const partId=this.current?.slot_parts?.[task.slot_key];let obs=partId?await this.showPart(null,partId):await this.observe(),s=this.slot(obs,task.slot_key);
       if(!TASK_OPERATION[s.kind]||TASK_OPERATION[s.kind]!==task.operation)throw new Fault('GUARD_REJECTED','Control type changed; the planned operation no longer applies.');
       if(!force&&this.matches(task,s))return {obs,s,skipped:true};
+      if(force&&s.interaction?.evidence?.verification==='result_icon'&&s.current?.length)throw new Fault('GUARD_REJECTED','A graded result-card answer cannot be replayed or changed automatically.');
       if(s.disabled)throw new Fault('GUARD_REJECTED','Answer field is disabled.');
       const d=task.desired;
       if(task.operation==='choose_one'||task.operation==='set_choice_set'){
@@ -270,7 +271,10 @@
         // Checkboxes reconcile every member, including unintended checked choices.
         for(const label of s.choices.map(c=>c.label)){obs=await this.observe();s=this.slot(obs,task.slot_key);const c=s.choices.find(c=>c.label===label),want=wanted.some(w=>norm(w)===norm(label));
           if(c.checked===want||task.operation==='choose_one'&&!want)continue;
-          if(c.disabled)throw new Fault('GUARD_REJECTED','Desired choice is disabled.');await this.click(s.frame,c.target,this.answerClick(task,s,want?'check_choice':'uncheck_choice',want?'This choice is in the planned answer set and is currently unchecked.':'This choice is outside the planned answer set and is currently checked.',{matched_option:c.label,checked_before:c.checked,checked_wanted:want}));await sleep(70);}
+          if(s.interaction?.evidence?.verification==='result_icon')await this.inspect(s.frame,c.target,'begin_choice',{expected_choice_owner:s.local_slot,expected_label:c.label});
+          if(c.disabled)throw new Fault('GUARD_REJECTED','Desired choice is disabled.');await this.click(s.frame,c.target,this.answerClick(task,s,want?'check_choice':'uncheck_choice',want?'This choice is in the planned answer set and is currently unchecked.':'This choice is outside the planned answer set and is currently checked.',{matched_option:c.label,checked_before:c.checked,checked_wanted:want}));
+          if(s.interaction?.evidence?.verification==='result_icon')return this.waitTask(task);
+          await sleep(70);}
       }else if(task.operation==='enter_value'){
         if(s.interaction?.adapter==='sheet_text'&&!s.interaction.editor_target){
           await this.click(s.frame,s.target,this.answerClick(task,s,'activate_cell','Open the previously identified spreadsheet text editor.',{click_count:2}));
@@ -432,12 +436,24 @@
       for(const before of obs.slots){const after=this.slot(fresh,before.slot_key);if(JSON.stringify(after.current)!==JSON.stringify(before.current))throw new Fault('VALUE_MISMATCH','Discovery changed an existing answer.',{slot_key:before.slot_key,before:before.current,after:after.current});}
       return fresh;
     }
+    async classifyCandidateChoices(obs){
+      for(const before of obs.slots.filter(s=>s.kind==='unresolved'&&s.interaction?.adapter==='candidate_choices')){
+        const fresh=await this.observe(),s=this.slot(fresh,before.slot_key);
+        if(s.kind==='unresolved')await this.inspect(s.frame,s.target,'classify_choices');
+      }
+      const fresh=await this.observe();this.same(fresh);return fresh;
+    }
     async resolveInteractions(obs){
       const unknown=obs.slots.filter(s=>s.kind==='unresolved'&&!s.disabled);
       this.current.interactionActions||={};
       for(const initial of unknown){
         let fresh=await this.observe(),s=this.slot(fresh,initial.slot_key);
         if(s.kind!=='unresolved')continue;
+        if(s.interaction?.adapter==='candidate_choices'){
+          const result=await this.inspect(s.frame,s.target,'classify_choices');
+          await this.event('INSPECT',result.promoted?'Established answer group and selected-state readback':'Answer group needs more interaction evidence',{slot_key:s.slot_key,adapter:'candidate_choices',actual:result.evidence,action_executed:false});
+          continue; // No exploratory answer clicks. Unknown is not a spreadsheet cell.
+        }
         const actions=this.current.interactionActions[s.slot_key]||={};
         await this.event('INSPECT','Identifying answer interaction',{slot_key:s.slot_key,actual:s.interaction});
         if(fresh.frames.some(f=>f.menus.length)){
@@ -522,9 +538,25 @@
       }while(Date.now()<until);
       await this.event('INSPECT','Dropdown choices remain unavailable after bounded discovery',{slot_key:key,failure_code:'OPTION_MISSING'});
     }
-    publicObservation(obs){return {question_key:obs.question_key,document_id:obs.document_id,observation_id:obs.observation_id,question:obs.question,...(obs.tables?.length||obs.table_context_complete===false?{tables:obs.tables||[],table_context_complete:obs.table_context_complete!==false}:{}),...(obs.parts?.length?{parts:obs.parts.map(p=>({part_id:p.part_id,label:p.label,selected:!!p.selected,slots:obs.slots.filter(s=>s.part_id===p.part_id).length}))}:{}),slots:obs.slots.map(s=>{s=this.current?this.slot(obs,s.slot_key):s;return ({slot_key:s.slot_key,frame_id:s.frame_id,dom_id:s.dom_id||null,kind:s.kind,label:s.label,...(s.part_id?{part_id:s.part_id}:{}),options:this.knownOptions(obs,s),current:s.current,...(s.interaction?{interaction:{adapter:s.interaction.adapter,evidence:s.interaction.evidence}}:{}),...(s.geometry?{geometry:s.geometry}:{})})}),completeness:obs.completeness,host:obs.host,task_note:this.config.note||'',evidence:this.current?.evidence||[]}}
-    async paid(obs,task=null,error=null,inspectionCorrection=false){await this.guard();await this.event(task?'REPAIR':'PLAN',task?'Repairing the failed task':'Planning answers for this question');const generation=this.generation;const body={run_id:this.id,request_id:crypto.randomUUID(),spend_limit:this.config.spend_limit,model:this.config.model,observation:this.publicObservation(obs)};
+    mergeEvidence(items,obs){
+      this.same(obs);const scope=obs.question_key+'|'+obs.document_id;
+      const previous=this.current.evidence_scope===scope?this.current.evidence||[]:[];
+      const key=e=>JSON.stringify([e.operation,e.frame_id??null,e.slot_key||'',e.inspection_key||'']);
+      const evidence=new Map(previous.map(e=>[key(e),e]));
+      for(const e of items)evidence.set(key(e),{...e,question_key:obs.question_key,document_id:obs.document_id});
+      const merged=[...evidence.values()];
+      // Never silently evict instructions to fit the request. Same-source facts replace superseded facts;
+      // unrelated facts survive, and overflow is an explicit stop before another paid plan or action.
+      if(merged.length>14||new TextEncoder().encode(JSON.stringify(merged)).length>32000)throw new Fault('QUESTION_INCOMPLETE','Inspection context exceeds its evidence budget; essential evidence was retained and no answer was executed.');
+      this.current.evidence=merged;this.current.evidence_scope=scope;
+    }
+    publicObservation(obs){return {question_key:obs.question_key,document_id:obs.document_id,observation_id:obs.observation_id,question:obs.question,...(obs.tables?.length||obs.table_context_complete===false?{tables:obs.tables||[],table_context_complete:obs.table_context_complete!==false}:{}),...(obs.parts?.length?{parts:obs.parts.map(p=>({part_id:p.part_id,label:p.label,selected:!!p.selected,slots:obs.slots.filter(s=>s.part_id===p.part_id).length}))}:{}),slots:obs.slots.map(s=>{s=this.current?this.slot(obs,s.slot_key):s;return ({slot_key:s.slot_key,frame_id:s.frame_id,dom_id:s.dom_id||null,kind:s.kind,label:s.label,...(s.part_id?{part_id:s.part_id}:{}),options:this.knownOptions(obs,s),current:s.current,...(s.interaction?{interaction:{adapter:s.interaction.adapter,evidence:s.interaction.evidence}}:{}),...(s.geometry?{geometry:s.geometry}:{})})}),completeness:obs.completeness,host:obs.host,task_note:this.config.note||'',evidence:this.current?.evidence_scope===obs.question_key+'|'+obs.document_id?this.current.evidence||[]:[]}}
+    async paid(obs,task=null,error=null,inspectionCorrection=false,formatCorrection=false){await this.guard();await this.event(task?'REPAIR':'PLAN',task?'Repairing the failed task':'Planning answers for this question');const generation=this.generation;const body={run_id:this.id,request_id:crypto.randomUUID(),spend_limit:this.config.spend_limit,model:this.config.model,observation:this.publicObservation(obs)};
+      if(obs.slots.some(s=>s.result_feedback))throw new Fault('GUARD_REJECTED','Answer feedback is already visible; another planning screenshot could expose the revealed answer. Review this attempt manually.');
       if(inspectionCorrection)body.inspection_target_correction=true;
+      if(formatCorrection)body.format_correction=true;
+      const textSize=new TextEncoder().encode(JSON.stringify(body.observation)).length;
+      if(textSize>100000)throw new Fault('QUESTION_INCOMPLETE','Question and retained inspection evidence exceed 100 KB; no paid request was made.');
       if(this.current?.planHints?.avoid_providers?.length)body.avoid_providers=this.current.planHints.avoid_providers;
       if(this.current?.planHints?.reasoning_mode)body.reasoning_mode=this.current.planHints.reasoning_mode;
       // See what a human sees: the planner always gets DOM + a settled screenshot
@@ -545,13 +577,19 @@
       if(!data.response){
         await this.event(task?'REPAIR':'PLAN','Model response rejected; no plan accepted',diagnostic);
         const code=data.detail?.split(':')[0]||'FAILED';
+        if(code==='SCHEMA_INVALID'&&data.format_correction?.kind==='invalid_json'&&Number.isFinite(data.cost)&&!this.ledger.pending_request&&!this.current.formatCorrections){
+          this.current.formatCorrections=1;await this.persist();
+          this.mergeEvidence([{operation:'format_correction',instruction:'The previous reply was invalid JSON and was not executed. Return exactly one valid JSON object for this fresh observation.'}],fresh);
+          await this.event(task?'REPAIR':'PLAN','Requesting one JSON format correction; rejected output was not executed',{failure_code:code,correction_attempt:1});
+          return this.paid(fresh,task,error,false,true);
+        }
         if(code==='TARGET_MISSING'&&data.inspection_correction?.kind==='inspection_target'&&Number.isFinite(data.cost)&&!this.ledger.pending_request){
           if(!this.current.inspectionTargetCorrections){
             this.current.inspectionTargetCorrections=1; // durable per-question limit, including resume/replanning
             const correction={operation:'inspection_request_correction',rejected_slot_key:data.inspection_correction.rejected_slot_key,
               instruction:'The rejected inspection was NOT executed. Use an exact offered slot_key for inspect_options, or slot_key="" with inspect_question (or a script-only request) to discover missing controls.',
               offered_slots:fresh.slots.map(s=>({slot_key:s.slot_key,label:s.label,kind:s.kind}))};
-            this.current.evidence=[...(this.current.evidence||[]).filter(e=>e.operation!=='inspection_request_correction').slice(-13),correction];
+            this.mergeEvidence([correction],fresh);
             await this.event(task?'REPAIR':'PLAN','Correcting the inspection target once; no page action executed',{failure_code:code,correction_attempt:1});
             return this.paid(fresh,task,error,true);
           }
@@ -599,8 +637,9 @@
       // Route inspection to observed question frames. Slot keys are harness IDs,
       // resolved by trusted bindings; the model never has to construct selectors.
       if(req.script){
-        const frames=requestedSlot?[requestedSlot.frame]:obs.frames.filter(f=>!obs.slots.length||obs.slots.some(s=>s.frame_id===f.frame_id));
+        const frames=requestedSlot?[requestedSlot.frame]:obs.frames;
         if(frames.length>8)throw new Fault('FRAME_UNREADABLE','Inspection spans too many frames; request a specific slot.');
+        const scriptResults=[];
         for(const frame of frames){
           await this.guard();const bindings={};
           for(const slot of obs.slots.filter(s=>s.frame_id===frame.frame_id)){
@@ -610,15 +649,16 @@
           const out=await AssignmentVisual.evaluate(this.tabId,req.script,{frame,bindings,stopped:()=>this.cancelled||this.b.stopped()});
           await this.guard();
           if(!out.ok&&/TARGET_STALE|CANCELLED|FRAME_UNREADABLE/.test(out.detail))throw new Fault(/TARGET_STALE|CANCELLED|FRAME_UNREADABLE/.exec(out.detail)[0],out.detail);
-          evidence.push({operation:'script',frame_id:frame.frame_id,document_id:frame.browser_document,script:req.script.slice(0,400),...(out.ok?{result:out.value}:{error:out.detail})});
+          scriptResults.push({frame_id:frame.frame_id,source_document:frame.browser_document,...(out.ok?{result:out.value}:{error:out.detail})});
         }
+        evidence.push({operation:'script',inspection_key:hash(req.script),script:req.script.slice(0,400),...(scriptResults.length===1?scriptResults[0]:{results:scriptResults})});
       }
       if(req.requests?.length){
         if(!req.slot_key){
-          const fresh=await this.observe();this.same(fresh);
+          const observed=await this.observe();this.same(observed);const fresh=await this.classifyCandidateChoices(observed);
           evidence.push({operation:'inspect_question',result:{question:fresh.question,slots:this.publicObservation(fresh).slots,completeness:fresh.completeness}});
         }else{
-        for(const op of req.requests){if(!['inspect_frame','inspect_slot','inspect_options','read_control_state','measure_target','inspect_svg_geometry','inspect_scroll_container'].includes(op))throw new Fault('GUARD_REJECTED','Unknown inspection.');
+        for(const op of req.requests){if(!['inspect_frame','inspect_slot','inspect_options','read_control_state','measure_target','inspect_svg_geometry','inspect_scroll_container','classify_choices'].includes(op))throw new Fault('GUARD_REJECTED','Unknown inspection.');
           let fresh=await this.observe(),s=this.slot(fresh,req.slot_key);
           const result=op==='inspect_options'?(s.kind==='selection'?await this.selectionOptions(s.slot_key,true):s.choices?.map(c=>({label:c.label,disabled:c.disabled}))):await this.inspect(s.frame,s.target,op);
           evidence.push({slot_key:s.slot_key,operation:op,result});
@@ -626,20 +666,23 @@
         }
       }
       if(!evidence.length)throw new Fault('TARGET_MISSING','The inspection produced no evidence.');
-      const serialized=JSON.stringify(evidence.map(({script,...data})=>data));if(this.current.inspectionSignature===serialized)throw new Fault('REPEATED_STATE','Inspection returned no new evidence.');this.current.inspectionSignature=serialized;this.current.evidence=evidence;r.progress();return this.observe();
+      const serialized=JSON.stringify(evidence.map(({script,...data})=>data));if(this.current.inspectionSignature===serialized)throw new Fault('REPEATED_STATE','Inspection returned no new evidence.');this.current.inspectionSignature=serialized;this.mergeEvidence(evidence,obs);r.progress();return this.observe();
     }
     async runQuestion(obs){
       let saved=this.ledger.questions[obs.question_key];
       this.current=saved||{key:obs.question_key,document:obs.document_id,completed:{},recovery:new Recovery(),plan:null};
       this.current.recovery=new Recovery(this.current.recovery);this.current.document=obs.document_id;this.current.frameDocuments=obs.frames.map(f=>({frame_id:f.frame_id,document_id:f.document_id}));this.current.enumeration=obs.enumeration;this.ledger.questions[obs.question_key]=this.current;
       await this.event('OBSERVE','Reading question');
-      if(!obs.completeness.complete)throw new Fault('QUESTION_INCOMPLETE',obs.completeness.note);
-      if(!this.current.plan)obs=await this.revealParts(obs);
-      else if(this.current.parts?.length>1)obs=await this.revealParts(obs);
+      if(obs.discovery_complete===false)throw new Fault('QUESTION_INCOMPLETE','Too many unfamiliar answer candidates to establish coverage; no paid request was made.');
+      if(!obs.completeness.complete&&/exceeds? \d+|More than \d+|traversal or identity limit/i.test(obs.completeness.note))throw new Fault('QUESTION_INCOMPLETE',obs.completeness.note+' This extraction limit cannot be repaired by repeating a model request.');
+      if(!obs.completeness.complete)await this.event('INSPECT','Question extraction is incomplete; only bounded inspection is allowed',{missing:obs.completeness.note});
+      if(obs.completeness.complete)obs=await this.classifyCandidateChoices(obs);
+      if(obs.completeness.complete&&(!this.current.plan||this.current.parts?.length>1))obs=await this.revealParts(obs);
       // A readable question with missing controls may request bounded discovery.
       // No answer plan may execute until actual slots have been observed.
-      for(const slot of obs.slots)if(slot.kind==='position'&&!slot.geometry?.calibrated){await this.readVisual(obs,slot);obs=await this.observe();this.slot(obs,slot.slot_key)}
+      for(const slot of obs.slots)if(obs.completeness.complete&&slot.kind==='position'&&!slot.geometry?.calibrated){await this.readVisual(obs,slot);obs=await this.observe();this.slot(obs,slot.slot_key)}
       if(!this.current.plan){let plan=await this.paid(obs);while(plan.kind==='request_inspection'){obs=await this.inspectRequest(plan,obs);plan=await this.paid(obs)}if(plan.kind==='needs_review')throw new Fault('QUESTION_INCOMPLETE',plan.reason);this.validate(plan,obs);this.current.plan=plan;await this.persist()}
+      if(obs.slots.some(s=>s.interaction?.evidence?.verification==='result_icon'))return this.runResultCard(obs);
       await this.executeTasks(this.validate(this.current.plan,obs));
       // Finished means every PART is finished, not every slot seen at the first observe. Two independent sources
       // must agree: the parts the harness could reveal (structure) and the parts the model read in the wording.
@@ -652,19 +695,61 @@
         const views=[];const recheck=async o=>{for(const sl of o.slots)if(sl.kind==='unresolved')delete this.current.interactionActions?.[sl.slot_key];return this.resolveInteractions(o)};
         if(this.current.parts?.length>1){for(const part of this.current.parts)views.push(await recheck(await this.showPart(null,part.part_id)))}else{const after=await this.observe();this.same(after);views.push(await recheck(after))}
         const newSlots=views.flatMap(v=>v.slots).filter(s=>!this.current.plan.tasks.some(t=>t.slot_key===s.slot_key)&&s.kind!=='unresolved');
-        this.current.not_answerable=views.flatMap(v=>v.slots).filter(s=>s.kind==='unresolved').map(s=>s.label||s.slot_key);
+        const unresolved=views.flatMap(v=>v.slots).filter(s=>s.kind==='unresolved');
+        this.current.not_answerable=unresolved.map(s=>s.label||s.slot_key);
+        this.current.unresolved=unresolved.filter(s=>!s.disabled).map(s=>({slot_key:s.slot_key,label:s.label}));
         if(!newSlots.length)break;
         if(round>=LIMITS.plan_rounds)throw new Fault('QUESTION_INCOMPLETE',`NEW_PART_APPEARED: ${newSlots.length} answer control(s) appeared after the planned answers were entered and the plan budget is spent; they were not planned.`,newSlots.map(s=>s.label).slice(0,10));
         await this.event('OBSERVE',`${newSlots.length} answer control(s) appeared after the planned answers; planning them`,{labels:newSlots.map(s=>s.label).slice(0,10)});
-        const base=views[views.length-1];const extra={...base,observation_id:crypto.randomUUID(),slots:newSlots,question:this.current.question_text||base.question};
+        const base=views[views.length-1];let extra={...base,observation_id:crypto.randomUUID(),slots:newSlots,question:this.current.question_text||base.question};
         for(const sl of newSlots)if(sl.part_id)(this.current.slot_parts||={})[sl.slot_key]=sl.part_id;
-        let plan=await this.paid(extra);while(plan.kind==='request_inspection'){const o=await this.inspectRequest(plan,extra);plan=await this.paid({...extra,evidence:o.evidence})}
+        let plan=await this.paid(extra);while(plan.kind==='request_inspection'){const o=await this.inspectRequest(plan,extra);extra={...o,slots:o.slots.filter(s=>newSlots.some(n=>n.slot_key===s.slot_key)),question:this.current.question_text||o.question};plan=await this.paid(extra)}
         if(plan.kind==='needs_review')throw new Fault('QUESTION_INCOMPLETE',plan.reason);this.validate(plan,extra);
         this.current.plan.tasks.push(...plan.tasks);if(plan.parts_declared>this.current.plan.parts_declared)this.current.plan.parts_declared=plan.parts_declared;await this.persist();
         await this.executeTasks(plan.tasks);
       }
+      const unknown=this.current.unresolved||[];
+      if(unknown.length){this.current.finished=false;throw new Fault('QUESTION_INCOMPLETE','Answer controls remain unresolved; they are not proven locked and the question is unfinished.',{unresolved:unknown});}
       this.current.finished=true;const left=this.current.not_answerable||[];
-      await this.event('FINISH',left.length?`All answerable answers entered and verified by DOM and a confirming screenshot; ${left.length} answer location(s) stayed locked and were left empty: ${left.slice(0,10).join(', ')}. Save and grade evidence are reported separately.`:'All observed answers entered and verified by DOM and a confirming screenshot. Save and grade evidence are reported separately.',{parts_found:Math.max(1,this.current.parts?.length||1),parts_declared:this.current.plan.parts_declared||1,...(left.length?{not_answerable:left.slice(0,20)}:{})});
+      await this.event('FINISH',left.length?`All answerable answers entered and verified by DOM and a confirming screenshot; ${left.length} answer location(s) are currently read-only (no editable marker) or explicitly disabled and were left empty: ${left.slice(0,10).join(', ')}. Save and grade evidence are reported separately.`:'All observed answers entered and verified by DOM and a confirming screenshot. Save and grade evidence are reported separately.',{parts_found:Math.max(1,this.current.parts?.length||1),parts_declared:this.current.plan.parts_declared||1,...(left.length?{not_answerable:left.slice(0,20)}:{})});
+    }
+    async runResultCard(obs){
+      const tasks=this.validate(this.current.plan,obs),s=obs.slots[0],task=tasks[0];
+      // A grading click may replace the whole question. Do not start it while any other
+      // answer or part would be left behind, and never replay an uncertain attempt.
+      if(obs.slots.length!==1||tasks.length!==1||task.operation!=='choose_one'||(this.current.plan.parts_declared||1)>1||this.current.parts?.length>1)
+        throw new Fault('QUESTION_INCOMPLETE','A result-card question must expose one complete answer group before automatic entry.');
+      if(this.current.result_card_attempt)throw new Fault('GUARD_REJECTED','This result-card attempt was already sent or interrupted. It will not be replayed automatically.');
+      this.current.result_card_attempt=true;await this.persist();
+      await this.event('EXECUTE','Entering the planned answer once',{slot_key:task.slot_key,requested_value:task.desired});
+      const result=await this.execute(task);
+      if(result.s.answer_result!=='correct')throw new Fault('VALUE_MISMATCH','The website marked the selected answer incorrect. No revealed answer or repair request was sent to the model.');
+      const chosen=result.s.choices.find(c=>c.label===task.desired.label);
+      const measured=await this.inspect(result.s.frame,chosen.target),box=measured.viewport;
+      const shot=await AssignmentVisual.screenshot(this.tabId);
+      // Freeze the two witnesses before the model call. A transition during capture is
+      // unverified; a transition after this check cannot redirect the pending answer.
+      const fresh=await this.observe(),again=this.slot(fresh,task.slot_key);
+      if(!this.matches(task,again)||again.answer_result!=='correct')throw new Fault('TARGET_STALE','Result changed during screenshot capture.');
+      const liveChoice=again.choices.find(c=>c.label===task.desired.label),after=(await this.inspect(again.frame,liveChoice.target)).viewport;
+      if(!box||!after||['x','y','w','h'].some(k=>Math.abs(box[k]-after[k])>1)||box.x<0||box.y<0||box.x+box.w>shot.viewport.width||box.y+box.h>shot.viewport.height)
+        throw new Fault('GUARD_REJECTED','The selected card was not fully visible and stable for verification.');
+      const bitmap=await createImageBitmap(await (await fetch(shot.dataUrl)).blob());
+      const sx=bitmap.width/shot.viewport.width,sy=bitmap.height/shot.viewport.height;
+      const crop=new OffscreenCanvas(Math.floor(box.w*sx),Math.floor(box.h*sy)),ctx=crop.getContext('2d');
+      ctx.drawImage(bitmap,box.x*sx,box.y*sy,box.w*sx,box.h*sy,0,0,crop.width,crop.height);bitmap.close();
+      const bytes=new Uint8Array(await (await crop.convertToBlob({type:'image/png'})).arrayBuffer());
+      let binary='';for(let i=0;i<bytes.length;i+=8192)binary+=String.fromCharCode(...bytes.subarray(i,i+8192));
+      const observation=this.publicObservation(obs);observation.observation_id=fresh.observation_id;observation.screenshot='data:image/png;base64,'+btoa(binary);
+      // The verifier sees only the chosen card and its pre-existing label, never
+      // another card's revealed correct marker or the page's answer-key feedback.
+      observation.evidence=[];observation.slots=observation.slots.map(sl=>({...sl,options:[task.desired.label],current:[task.desired.label]}));
+      const verdict=await this.verifySnapshot(observation,[{slot_key:task.slot_key,label:s.label,value:task.desired.label}]);
+      if(verdict.kind!=='verified')throw new Fault('VALUE_MISMATCH','The selected-card screenshot did not confirm this attempt. It will not be replayed.');
+      this.current.completed[task.slot_key]={entry_verified:true,visual_verified:true,action_executed:!result.skipped,actual:[task.desired.label],document_id:fresh.document_id,grade_state:'correct',save_state:fresh.save_state};
+      this.current.finished=true;this.current.recovery.progress();
+      await this.event('FINISH','Selected answer confirmed by its own result marker and a cropped screenshot.',{entry_verified:true,grade_state:'correct'});
+      this.b.progress(1,1,Object.keys(this.ledger.questions).length,this.ledger.cost,this.steps);
     }
     async executeTasks(tasks){let count=0;
       for(let task of tasks){
@@ -677,7 +762,7 @@
             const partId=this.current?.slot_parts?.[task.slot_key];const fresh=partId?await this.showPart(null,partId):await this.observe(),s=this.slot(fresh,task.slot_key);let local=false;try{local=this.current.recovery.failure(task,e,{current:s.current,options:s.frame.menus.filter(m=>m.owner===s.local_slot).map(m=>m.label)})}finally{await this.persist()}
             if(local&&['TARGET_MISSING','INPUT_NO_EFFECT','VALUE_MISMATCH','WRONG_MENU_OWNER'].includes(e.code)){await this.event('LOCAL_RECOVERY','Re-observing the failed widget: '+e.message,{failure_code:e.code,...(e.actual!=null?{actual:e.actual}:{})});continue}
             if(++this.current.recovery.repairs>LIMITS.repairs)throw new Fault('BUDGET_EXHAUSTED','Question repair budget reached.');await this.persist();
-            const patch=await this.paid(fresh,task,e);if(patch.kind!=='plan')throw new Fault('QUESTION_INCOMPLETE',patch.reason||'Repair needs more evidence.');this.validate(patch,fresh,task);task=patch.tasks[0];const index=this.current.plan.tasks.findIndex(t=>t.slot_key===task.slot_key);this.current.plan.tasks[index]=task;this.current.recovery.progress();await this.persist();
+            let repairObs=fresh,patch=await this.paid(repairObs,task,e);while(patch.kind==='request_inspection'){repairObs=await this.inspectRequest(patch,repairObs);patch=await this.paid(repairObs,task,e)}if(patch.kind!=='plan')throw new Fault('QUESTION_INCOMPLETE',patch.reason||'Repair needs more evidence.');this.validate(patch,repairObs,task);task=patch.tasks[0];const index=this.current.plan.tasks.findIndex(t=>t.slot_key===task.slot_key);this.current.plan.tasks[index]=task;this.current.recovery.progress();await this.persist();
           }
         }
         if(count%8===0){await this.event('OBSERVE','Reconciling completed batch');await this.reconcile()}
@@ -703,7 +788,7 @@
       const prepare=async o=>{o=await this.resolveInteractions(o);return this.discoverSelectionOptions(o)};
       if(!obs.parts||obs.parts.length<2)return prepare(obs);
       const start=obs.parts.find(p=>p.selected)?.part_id,seen=new Map();
-      const record=o=>{const id=o.parts.find(p=>p.selected)?.part_id||null;seen.set(id,{question:o.question,slots:o.slots.filter(s=>(s.part_id||id)===id),tables:(o.tables||[]).map(t=>({...t,part_id:id}))})};
+      const record=o=>{const id=o.parts.find(p=>p.selected)?.part_id||null;seen.set(id,{question:o.question,complete:o.completeness.complete,note:o.completeness.note,tableComplete:o.table_context_complete,slots:o.slots.filter(s=>(s.part_id||id)===id),tables:(o.tables||[]).map(t=>({...t,part_id:id}))})};
       record(await prepare(obs));
       for(const part of obs.parts){if(seen.has(part.part_id)||part.disabled)continue;const shown=await prepare(await this.showPart(null,part.part_id));record(shown);
         await this.event('OBSERVE',`Revealed part "${part.label}"`,{part_id:part.part_id,slots:seen.get(part.part_id).slots.length});}
@@ -712,10 +797,11 @@
       const slots=[],keys=new Set();for(const [,v] of seen)for(const s of v.slots)if(!keys.has(s.slot_key)){keys.add(s.slot_key);slots.push(s)}
       const base=seen.get(start)?.question||obs.question;const extra=[...seen.entries()].filter(([id])=>id!==start).map(([id,v])=>{const label=obs.parts.find(p=>p.part_id===id)?.label||id;return `[Part "${label}"] `+added(base,v.question)});
       const tables=[],tkeys=new Set();for(const [,v] of seen)for(const t of v.tables){const k=(t.part_id||'')+':'+t.frame_id+':'+(t.dom_id||JSON.stringify(t.rows?.[0]||''));if(!tkeys.has(k)){tkeys.add(k);tables.push(t)}}
-      this.current.parts=obs.parts.map(p=>({part_id:p.part_id,label:p.label}));this.current.slot_parts=Object.fromEntries(slots.filter(s=>s.part_id).map(s=>[s.slot_key,s.part_id]));this.current.question_text=[base,...extra].join('\n\n').slice(0,60000);await this.persist();
+      const fullText=[base,...extra].join('\n\n'),complete=[...seen.values()].every(v=>v.complete)&&fullText.length<=60000;
+      this.current.parts=obs.parts.map(p=>({part_id:p.part_id,label:p.label}));this.current.slot_parts=Object.fromEntries(slots.filter(s=>s.part_id).map(s=>[s.slot_key,s.part_id]));this.current.question_text=fullText.slice(0,60000);await this.persist();
       if(slots.length>100)throw new Fault('QUESTION_INCOMPLETE','More than 100 answer slots across parts; narrow the question scope.');
-      return {...obs,observation_id:crypto.randomUUID(),slots,tables:tables.slice(0,12),table_context_complete:obs.table_context_complete&&tables.length<=12,question:[base,...extra].join('\n\n').slice(0,60000),
-        completeness:{complete:obs.completeness.complete,note:obs.completeness.note}};
+      return {...obs,observation_id:crypto.randomUUID(),slots,tables:tables.slice(0,12),table_context_complete:[...seen.values()].every(v=>v.tableComplete)&&tables.length<=12,question:fullText.slice(0,60000),
+        completeness:{complete,note:complete?'':fullText.length>60000?'Question context across parts exceeds 60000 characters.':[...seen.values()].map(v=>v.note).filter(Boolean).join('; ')}};
     }
     // Second witness. After every answer is confirmed by DOM readback, a
     // screenshot is shown to the model to confirm the entered values are actually
@@ -737,8 +823,12 @@
         expected.push({slot_key:t.slot_key,label:s.label,value:t.operation==='enter_value'&&s.current!=null&&String(s.current)!==''?String(s.current):plannedValue(t)});
       }
       if(!expected.length)return {kind:'verified'};
-      const shot=await AssignmentVisual.screenshot(this.tabId),generation=this.generation;
+      const shot=await AssignmentVisual.screenshot(this.tabId);
       const observation=this.publicObservation(obs);observation.screenshot=shot.dataUrl;
+      return this.verifySnapshot(observation,expected);
+    }
+    async verifySnapshot(observation,expected){
+      await this.guard();const generation=this.generation;
       const body={run_id:this.id,request_id:crypto.randomUUID(),spend_limit:this.config.spend_limit,model:this.config.model,observation,expected};
       this.ledger.pending_request=body.request_id;await this.persist();
       await this.event('VERIFY','Confirming answers from a screenshot (second witness)',{slot_count:expected.length});
@@ -789,6 +879,10 @@
         while(true){this.current=null;let obs=await this.observe();if(obs.page_state==='complete'){await this.event('FINISH','Page reports assignment complete.',{grade_state:obs.grade_state,save_state:obs.save_state});this.ledger.status='completed';break}
           if(obs.page_state!=='locked')await this.runQuestion(obs);else await this.event('FINISH','Attempt is graded and locked; answer entry is retired.',{grade_state:obs.grade_state,save_state:obs.save_state});
           obs=await this.observe();this.config=await this.b.config();
+          if(this.current?.finished&&obs.question_key!==this.current.key){
+            if(!this.config.advance){this.ledger.status='finished';break}
+            await this.event('ADVANCE','The page advanced after the verified answer; observing the new question.');continue;
+          }
           if(this.config.check_work&&this.current?.finished&&obs.page_state==='answering'){
             const checks=obs.navigation.filter(n=>n.kind==='check'&&!n.disabled),signature=hash(JSON.stringify(this.current.plan));this.current.checks||=[];
             if(checks.length===1&&!this.current.checks.includes(signature)){

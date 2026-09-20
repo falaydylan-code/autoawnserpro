@@ -48,9 +48,16 @@ def test_script_resolves_slot_in_question_frame_not_top_page(extension,targeted)
   return engine.current.evidence;
  }''',targeted)
  assert len(result)==1
- assert result[0]['frame_id']>0 and result[0]['document_id']
- assert result[0]['result']['tag']=='INPUT'
- assert result[0]['result']['id']=='amount'
+ assert result[0]['document_id']
+ # Question-wide scripts now inspect every readable frame in one evidence entry;
+ # a missing binding in the top frame must never resolve its unrelated #amount.
+ frames=[result[0]] if targeted else result[0]['results']
+ answer=[f for f in frames if f['frame_id']>0]
+ assert len(answer)==1 and answer[0]['result']['tag']=='INPUT'
+ assert answer[0]['result']['id']=='amount'
+ if not targeted:
+  top=next(f for f in frames if f['frame_id']==0)
+  assert 'error' in top and 'result' not in top
 
 
 @pytest.mark.parametrize('mode',['idless','shadow','stale','cancelled'])

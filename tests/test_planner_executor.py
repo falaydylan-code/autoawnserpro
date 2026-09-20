@@ -312,7 +312,7 @@ def test_invalid_inspection_corrects_once_before_any_script_or_input(extension,m
  else:
   assert len(calls)==3 and result['status']=='finished',result['events'][-1]['detail']
   assert page.locator('#cell').get_attribute('data-value')=='Asset'
-  inspection=calls[2]['observation']['evidence'][0]
+  inspection=next(e for e in calls[2]['observation']['evidence'] if e['operation']!='inspection_request_correction')
   assert inspection['operation']==('inspect_question' if mode=='discovery' else 'script' if mode=='script_discovery' else 'inspect_options')
   if mode in ('targeted','delayed_arrow'):
    assert inspection['result']['options']==[]  # options are created only on later answer entry
@@ -499,7 +499,7 @@ def test_start_ignores_old_workflow_preference_and_uses_planner(extension):
    await chrome.storage.local.set({armed:true,planner_enabled:false});
    let ran=0;const Original=AssignmentPlanner.Engine,originalFetch=fetch;
    AssignmentPlanner.Engine=class {constructor(){this.ledger={}}async run(){ran++}};
-   globalThis.fetch=async u=>String(u).includes('/api/capabilities')?new Response(JSON.stringify({protocol:4,features:['task_plans','stable_slots','typed_verification','bounded_repair','frame_scoped_inspection','interaction_classification']})):originalFetch(u);
+   globalThis.fetch=async u=>String(u).includes('/api/capabilities')?new Response(JSON.stringify({protocol:4,features:['task_plans','stable_slots','typed_verification','bounded_repair','frame_scoped_inspection','interaction_classification','choice_discovery','bounded_format_correction']})):originalFetch(u);
    try {await __assignmentHarness.startSelected(id);return {ran,legacy:typeof __assignmentHarness.run,errors:__assignmentHarness.state.log.filter(e=>e.kind==='error')}}
    finally{AssignmentPlanner.Engine=Original;globalThis.fetch=originalFetch}
  }""",tid)
