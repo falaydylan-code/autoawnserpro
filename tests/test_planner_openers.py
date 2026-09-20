@@ -89,3 +89,71 @@ def test_a_planned_blank_on_an_already_blank_dropdown_touches_nothing(extension)
  purposes=[e['purpose'] for e in result['events'] if e['purpose']]
  assert not any(p in purposes for p in ('activate_cell','open_menu_by_geometry','open_combobox','choose_option')), purposes   # already blank: execution skipped it
  assert page.evaluate('opens')==1 and page.locator('#date_line .dropdownValue').inner_text()==''            # the one open was discovery reading the choices
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# A shared arrow whose label mirrors the active cell. The live M3-9 run (1:20 PM, 0.10.36) filled six cells and
+# then could not open the "Expenses" header dropdown: McGraw names the active cell after the header above it, the
+# header already read "Revenues" (filled two tasks earlier), so the arrow's label "Revenues" matched two cells and
+# openingControls threw the arrow away although it sat inside this cell and no other. A label is evidence, not a
+# veto: only a label that names a DIFFERENT cell, or a set that leaves this cell out, refuses a button -- and every
+# refusal is now written into opening_control.rejected so the log says what was seen.
+# ---------------------------------------------------------------------------------------------------------------
+SHARED_PLAN = {'sec1': 'Revenues', 'row_a': 'Service Revenue', 'sec2': 'Expenses'}
+
+
+def run_shared(w, tid):
+    return w.evaluate('''async ({id,plan})=>{const h=__assignmentHarness;await AssignmentVisual.attach(id);
+      const bridge=h.plannerBridge();bridge.config=async()=>({advance:false,auto_submit:false,spend_limit:2,model:'test'});
+      bridge.request=async(phase,body)=>{
+        if(phase==='verify')return {cost:.001,response:{kind:'verified'}};
+        return {cost:.001,response:{kind:'plan',question_key:body.observation.question_key,observation_id:body.observation.observation_id,
+          tasks:body.observation.slots.map((s,i)=>({task_id:'t'+i,slot_key:s.slot_key,operation:'set_selection',desired:{label:plan[s.dom_id]},depends_on:[]}))}};};
+      const engine=new AssignmentPlanner.Engine(bridge,id,await bridge.config());const r=await engine.run();
+      return {status:r.status,events:r.events.map(e=>({phase:e.phase,detail:e.detail,failure_code:e.failure_code||null,purpose:e.click_details?.purpose||null,
+        evidence:e.click_details?.evidence||null,slot:e.slot_key||e.click_details?.slot_key||null,
+        opening_control:e.click_details?.opening_control||null,rejected:e.actual?.opening_control?.rejected||e.click_details?.opening_control?.rejected||null}))};}''',
+      {'id': tid, 'plan': SHARED_PLAN})
+
+
+def test_a_label_shared_with_this_cell_falls_through_to_geometry_and_the_statement_is_finished(extension):
+    page, w, tid = navigate(extension, 'dropdown_shared_label.html?mode=shared')
+    result = run_shared(w, tid)
+    assert result['status'] == 'finished', result['events'][-3:]
+    assert page.locator('#row_a .dropdownValue').inner_text() == 'Service Revenue'
+    assert page.locator('#sec2 .dropdownValue').inner_text() == 'Expenses'
+    assert page.locator('#sec1 .dropdownValue').inner_text() == 'Revenues'          # already right: never touched
+    assert page.evaluate('clicks')[-2:] == ['row_a', 'sec2']                        # discovery opens each once; execution opens the two empties
+    opened = [e for e in result['events'] if e['purpose'] == 'open_menu_by_geometry' and (e['slot'] or '').endswith('sec2')]
+    assert opened and opened[-1]['evidence'] == 'overlay_geometry'
+    candidate = opened[-1]['opening_control']['candidates'][0]
+    assert candidate['shared_label'] == 'Revenues' and candidate['title'] == 'Show All Items'
+
+
+def test_a_label_naming_only_another_cell_refuses_the_arrow_and_says_why(extension):
+    page, w, tid = navigate(extension, 'dropdown_shared_label.html?mode=foreign')
+    result = run_shared(w, tid)
+    assert result['status'] == 'needs_review'
+    clicks = page.evaluate('clicks')
+    assert 'row_a' not in clicks and 'sec2' not in clicks                                # their arrow was never clicked (sec1's own, unlabelled, opens for discovery)
+    assert page.locator('#row_a .dropdownValue').inner_text() == '' and page.locator('#sec2 .dropdownValue').inner_text() == ''
+    stop = next(e for e in result['events'] if e['failure_code'] == 'WRONG_MENU_OWNER')
+    assert 'activate_cell' in stop['detail']
+    rejected = stop['rejected']
+    arrow = next(r for r in rejected if r['title'] == 'Show All Items')
+    assert arrow['why'] == 'label_names_another_cell' and arrow['matches'] == ['id:sec1'], arrow
+
+
+def test_a_label_matching_other_cells_but_not_this_one_is_refused_after_the_shared_case_passes(extension):
+    page, w, tid = navigate(extension, 'dropdown_shared_label.html?mode=excludes')
+    result = run_shared(w, tid)
+    # row_a carries the stale name "Revenues" itself, so its arrow label is shared WITH it: filled. sec2 does not:
+    # the label names sec1 and row_a only, so its arrow is refused and the run stops naming why.
+    assert result['status'] == 'needs_review'
+    assert page.locator('#row_a .dropdownValue').inner_text() == 'Service Revenue'
+    assert page.locator('#sec2 .dropdownValue').inner_text() == ''
+    clicks = page.evaluate('clicks')
+    assert 'row_a' in clicks and 'sec2' not in clicks
+    stop = next(e for e in result['events'] if e['failure_code'] == 'WRONG_MENU_OWNER')
+    arrow = next(r for r in stop['rejected'] if r['title'] == 'Show All Items')
+    assert arrow['why'] == 'label_excludes_this_cell' and sorted(arrow['matches']) == ['id:row_a', 'id:sec1'], arrow
