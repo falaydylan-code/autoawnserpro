@@ -43,6 +43,13 @@
     case 'set_choice_set':return (d.labels||[]).join(', ');
     case 'set_order':return (d.sequence||[]).join(' > ');
     default:return '';}};
+  // What changed between two identity snapshots: the frame set, or per frame the stem text, the control structure,
+  // the position or the tab strip. 'unknown' when a snapshot is missing (a question resumed from an older ledger).
+  const identityMovers=(was,now)=>{if(!was?.detail||!now?.detail)return 'unknown';
+    if(was.frames.join()!==now.frames.join())return `frames ${JSON.stringify(was.frames)} -> ${JSON.stringify(now.frames)}`;
+    const moved=[];for(const a of was.detail){const b=now.detail.find(d=>d.frame_id===a.frame_id);if(!b)continue;
+      for(const k of ['stem','structure','position','tabs'])if(a[k]!==b[k])moved.push(k+(was.detail.length>1?'@frame '+a.frame_id:''))}
+    return moved.length?moved.join(', '):'no ingredient reported'};
   class Fault extends Error{constructor(code,detail,actual=null){super(code+': '+detail);this.code=code;this.actual=actual}}
   const requireOK=r=>{if(!r?.ok)throw new Fault(r?.code||'INPUT_NO_EFFECT',r?.detail||'Browser operation failed.',r?.data??null);return r};
   class Recovery {
@@ -117,8 +124,10 @@
         const owners=frames.flatMap(parent=>parent.frames.filter(child=>child.src===f.url).map(child=>({parent,child})));if(owners.length!==1||!owners[0].child.exact)return null;
         const {parent,child}=owners[0],above=frameOffset(parent,seen);return above?{x:above.x+child.x,y:above.y+child.y}:null};
       for(const f of frames)f.measured_offset=frameOffset(f);
-      const active=frames.filter(f=>f.slots.length),used=active.length?active:frames;
+      const active=frames.filter(f=>f.slots.length),members=frames.filter(f=>f.slots.length||f.parts?.length),used=members.length?members:frames;
       const question_key=hash(used.map(f=>f.frame_id+':'+f.question_key).join('|'));
+      // Which frames and which ingredients (hashed) made the key: when it moves, the log can say what moved.
+      const identity={frames:used.map(f=>f.frame_id),detail:used.map(f=>({frame_id:f.frame_id,...(f.identity||{})}))};
       const document_id=hash(frames.map(f=>f.frame_id+':'+f.document_id+':'+f.browser_document).join('|'));
       const slots=active.flatMap(f=>f.slots.map(s=>({...s,slot_key:question_key+'/'+f.frame_id+'/'+s.slot_key,local_slot:s.slot_key,frame_id:f.frame_id,frame:f})));
       // Excluding an unrelated frame is fine as long as a readable frame still
@@ -139,7 +148,7 @@
       // bounded under the backend's question limit.
       const fullQuestionText=[...new Set(frames.map(f=>f.question).filter(Boolean))].join('\n'),questionText=fullQuestionText.slice(0,60000);
       const parts=frames.flatMap(f=>(f.parts||[]).map(p=>({...p,frame_id:f.frame_id,frame:f})));
-      const obs={question_key,document_id,observation_id:crypto.randomUUID(),question:questionText,tables,table_context_complete,slots,frames,parts,discovery_complete:frames.every(f=>f.discovery_complete!==false),
+      const obs={question_key,identity,document_id,observation_id:crypto.randomUUID(),question:questionText,tables,table_context_complete,slots,frames,parts,discovery_complete:frames.every(f=>f.discovery_complete!==false),
         completeness:{complete:fullQuestionText.length<=60000&&slots.length<=100&&frames.every(f=>f.completeness.complete),note:(fullQuestionText.length>60000?'Question context exceeds 60000 characters; missing context must be recovered. ':'')+(slots.length>100?'More than 100 answer slots; narrow the question scope. ':'')+frames.map(f=>f.completeness.note).filter(Boolean).join('; ')},
         enumeration:frames.find(f=>f.enumeration)?.enumeration||null,
         page_state:frames.find(f=>f.page_state!=='answering')?.page_state||'answering',host:frames[0].host,
@@ -148,7 +157,9 @@
       if(new Set(slots.map(s=>s.slot_key)).size!==slots.length)throw new Fault('TARGET_AMBIGUOUS','Duplicate logical slots.');
       return obs;
     }
-    same(obs){if(!this.current||obs.question_key!==this.current.key||obs.document_id!==this.current.document)throw new Fault('TARGET_STALE','Question or document changed; pending task discarded.')}
+    same(obs){if(!this.current)throw new Fault('TARGET_STALE','No question is in progress; pending task discarded.');
+      if(obs.document_id!==this.current.document)throw new Fault('TARGET_STALE','Document was replaced; pending task discarded.',{document:{was:this.current.document,now:obs.document_id}});
+      if(obs.question_key!==this.current.key)throw new Fault('TARGET_STALE',`Question identity changed (${identityMovers(this.current.identity,obs.identity)}); pending task discarded.`,{identity:{was:this.current.identity||null,now:obs.identity||null}});}
     slot(obs,key){this.same(obs);const s=obs.slots.filter(s=>s.slot_key===key);if(s.length===1&&!s[0].geometry?.calibrated&&this.current.visual?.[key]){s[0].geometry=this.current.visual[key];s[0].current=s[0].geometry.points;}
       // A group with no DOM selected-state cannot report what is selected; the harness remembers what it confirmed
       // on screen, and every readback of that slot goes through this memory.
@@ -740,7 +751,7 @@
     async runQuestion(obs){
       let saved=this.ledger.questions[obs.question_key];
       this.current=saved||{key:obs.question_key,document:obs.document_id,completed:{},recovery:new Recovery(),plan:null};
-      this.current.recovery=new Recovery(this.current.recovery);this.current.document=obs.document_id;this.current.frameDocuments=obs.frames.map(f=>({frame_id:f.frame_id,document_id:f.document_id}));this.current.enumeration=obs.enumeration;this.ledger.questions[obs.question_key]=this.current;
+      this.current.recovery=new Recovery(this.current.recovery);this.current.document=obs.document_id;this.current.identity=obs.identity;this.current.frameDocuments=obs.frames.map(f=>({frame_id:f.frame_id,document_id:f.document_id}));this.current.enumeration=obs.enumeration;this.ledger.questions[obs.question_key]=this.current;
       await this.event('OBSERVE','Reading question');
       if(obs.discovery_complete===false)throw new Fault('QUESTION_INCOMPLETE','Too many unfamiliar answer candidates to establish coverage; no paid request was made.');
       if(!obs.completeness.complete&&/exceeds? \d+|More than \d+|traversal or identity limit/i.test(obs.completeness.note))throw new Fault('QUESTION_INCOMPLETE',obs.completeness.note+' This extraction limit cannot be repaired by repeating a model request.');
@@ -846,12 +857,21 @@
       if(o.parts.find(p=>p.selected)?.part_id===partId)return o;
       const part=o.parts.find(p=>p.part_id===partId);if(!part)throw new Fault('TARGET_MISSING','Part tab is not present.',partId);
       if(part.disabled)throw new Fault('GUARD_REJECTED','Part tab is disabled.',part.label);
+      this.same(o);   // a stale view never gets an input
       await this.click(part.frame,part.target,{purpose:'show_part',executor_reason:'Reveal this part of the question; only the selected part\'s answer controls are visible.',part_id:partId,part_label:part.label});
-      const until=Date.now()+LIMITS.ui;let previous=null;
-      do{await sleep(120);o=await this.observe();this.same(o);
-        if(o.parts.find(p=>p.selected)?.part_id===partId){const keys=o.slots.map(s=>s.slot_key).sort().join('|');if(previous===keys)return o;previous=keys}
+      // Settling is a bounded heuristic: two consecutive agreeing looks at a part that is selected and shows its own
+      // controls. A page that swaps the part's text later, with no busy marker, is not detected by this window.
+      const until=Date.now()+LIMITS.ui;let previous=null,selected=false,owned=false;
+      do{await sleep(120);o=await this.observe();
+        if(o.document_id!==this.current.document)throw new Fault('TARGET_STALE','Document was replaced while switching parts.',{document:{was:this.current.document,now:o.document_id}});
+        const frame=o.frames.find(f=>f.frame_id===part.frame_id);selected=o.parts.find(p=>p.selected)?.part_id===partId;
+        owned=selected&&!!frame&&(o.slots.some(s=>s.frame_id===part.frame_id&&s.part_id===partId&&['panel','inferred'].includes(s.part_scope))||['locked','complete'].includes(frame.page_state));
+        if(!selected||!owned||frame?.identity?.busy){previous=null;continue}
+        const signature=[o.slots.map(s=>s.slot_key).sort().join('|'),o.question_key,frame.identity?.part_content].join('#');
+        if(previous===signature){this.same(o);return o}previous=signature;
       }while(Date.now()<until);
-      throw new Fault('TARGET_MISSING','Part did not become selected and settle after clicking its tab.',part.label);
+      const why=!selected?'did not become selected':!owned?'is selected but showed no answer controls the harness can tie to it (no declared tab panel; '+(o.frames.find(f=>f.frame_id===part.frame_id)?.identity?.no_inference||'no tab widget inferred')+')':'kept changing';
+      throw new Fault('TARGET_MISSING',`Part "${part.label}" ${why} within ${LIMITS.ui/1000} s of clicking its tab; nothing was recorded for it.`,{part_id:partId,identity:o.frames.find(f=>f.frame_id===part.frame_id)?.identity||null});
     }
     async revealParts(obs){
       // Each part is prepared while it is the visible one: its unresolved widgets identified and its dropdown

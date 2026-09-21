@@ -1,0 +1,53 @@
+<!doctype html><meta charset="utf-8"><title>Journal entry worksheet with bare-input tabs</title>
+<style>body{font:16px sans-serif;margin:20px}main{max-width:900px}#worksheet{border:1px solid #888;padding:12px;background:#f4f4f4}[role=tab]{padding:4px 12px;margin-right:4px}[role=tab][aria-selected=true]{font-weight:bold;border-bottom:2px solid #333}#description{border:1px solid #888;background:#fff;padding:10px;margin:8px 0}td,th{border:1px solid #888;padding:4px 8px}input{width:180px}table{border-collapse:collapse}</style>
+<!-- McGraw's journal-entry worksheet as it stopped the run (Q12, 2026-09-21 12:38): NO data-question-id, a question
+     position and wording outside the box, and inside the box a tab strip of bare <input type=button role=tab>
+     (no aria-controls, no id, no tabpanel anywhere) over a description + a table that the site rebuilds on every
+     tab click with the SAME cell ids. Values entered on one tab survive a round trip, as they do live. ?params:
+       delay=<ms>  the description + table appear that long after the click (the box is empty meanwhile)
+       wrapper=1   the tabs are direct children of the box, beside the table (no tab strip element)
+       noposition=1 / shorttext=1 / inpos=1   no anchor: no position, under 40 chars of outside text, or the
+                    position sits inside the box -- the harness must NOT infer the widget on these
+       twostrips=1 a second, unrelated tab group in the question (View: Table | Chart)
+       docswap=1   clicking a tab navigates the document (identity of the document, not the question, changes)
+       latetext=1  the table arrives at once, the description 400 ms later; the box says aria-busy until then -->
+<main>
+  <h2 id="title">E4-15 (Algo) Part 2</h2>
+  <div class="question-number" id="position">Question 12 of 21</div>
+  <p id="required"><strong>Required:</strong> 2. Prepare the adjusting journal entries required at December 31. <em>Note: If no entry is required for a transaction or event, select "No Journal Entry Required" in the first account field.</em></p>
+  <input type="button" value="View transaction list">
+  <div id="worksheet">
+    <h3>Journal entry worksheet</h3>
+    <div id="tabs"><input type="button" role="tab" value="1" aria-selected="true"><input type="button" role="tab" value="2" aria-selected="false"><input type="button" role="tab" value="3" aria-selected="false"></div>
+    <div id="body"></div>
+    <input type="button" value="Record entry"> <input type="button" value="clear">
+  </div>
+</main>
+<script>
+const params=new URLSearchParams(location.search),delay=Number(params.get('delay')||0);
+const TX=['Record the entry for the rent expired during the year, $1,190.','Record the entry for supplies used during the year, $2,400.','Record the depreciation on equipment for the year, $3,100.'];
+const ROWS=[['0_table0_cell_c1_r0','General Journal row 1'],['0_table0_cell_c2_r0','Debit row 1']];
+window.tabClicks=[];window.rebuilds=0;window.values=[{},{},{}];let selected=0;
+function render(i,text){
+  document.getElementById('body').innerHTML=`<div id="description">${text??TX[i]}</div><p>Note: Enter debits before credits.</p>
+    <table id="0_table0"><tr><th>Transaction</th><th>General Journal</th><th>Debit</th></tr><tr><td>${'abc'[i]}</td>${ROWS.map(([id,label])=>`<td><input id="${id}" aria-label="${label}"></td>`).join('')}</tr></table>`;
+  for(const [id] of ROWS){const e=document.getElementById(id);e.value=window.values[i][id]||'';e.oninput=()=>{window.values[i][id]=e.value}}
+  window.rebuilds++;
+}
+function show(i){
+  window.tabClicks.push(i+1);
+  if(params.get('docswap'))return location.assign(location.pathname+'?docswap=1&reloaded='+(i+1));
+  selected=i;for(const [j,t] of [...document.querySelectorAll('[role=tab]')].entries())t.setAttribute('aria-selected',String(j===i));
+  document.getElementById('body').innerHTML='';
+  const box=document.getElementById('worksheet');
+  if(params.get('latetext')){render(i,TX[selected===0?1:0]);box.setAttribute('aria-busy','true');setTimeout(()=>{if(selected===i){document.getElementById('description').textContent=TX[i];box.removeAttribute('aria-busy')}},400);return}
+  if(delay)setTimeout(()=>{if(selected===i)render(i)},delay);else render(i);
+}
+if(params.get('wrapper')){const strip=document.getElementById('tabs');for(const t of [...strip.children])strip.parentElement.insertBefore(t,strip);strip.remove()}
+if(params.get('noposition'))document.getElementById('position').remove();
+if(params.get('shorttext')){document.getElementById('required').remove();document.getElementById('title').remove()}
+if(params.get('inpos'))document.getElementById('worksheet').prepend(document.getElementById('position'));
+if(params.get('twostrips'))document.querySelector('main').insertAdjacentHTML('afterbegin','<div role="tablist"><button type="button" role="tab" aria-selected="true">Table</button><button type="button" role="tab" aria-selected="false">Chart</button></div>');
+for(const [i,t] of [...document.querySelectorAll('#worksheet [role=tab], main > [role=tab]')].entries())t.onclick=()=>show(i);
+render(0);
+</script>

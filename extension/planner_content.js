@@ -335,13 +335,34 @@
     const tabs=all(root,'[role=tab]').filter(t=>shown(t)&&!forbidden.test(name(t))&&!/^(?:next|continue|submit|check)\b/i.test(name(t)));
     const partOf=new Map(),panels=[];
     const parts=tabs.length>=2?tabs.map((t,i)=>{const panel=t.getAttribute('aria-controls')?document.getElementById(t.getAttribute('aria-controls')):null;if(panel){panels.push(panel);partOf.set(panel,'part:'+key(t))}
-      return {part_id:'part:'+key(t),label:name(t)||('Part '+(i+1)),selected:t.getAttribute('aria-selected')==='true'||t.matches('.ui-tabs-active,.ui-state-active,.active,[aria-current=true]'),tab:t,disabled:!!t.disabled||t.getAttribute('aria-disabled')==='true'}}):[];
+      return {part_id:'part:'+key(t),label:name(t)||norm(t.value)||('Part '+(i+1)),selected:t.getAttribute('aria-selected')==='true'||t.matches('.ui-tabs-active,.ui-state-active,.active,[aria-current=true]'),tab:t,disabled:!!t.disabled||t.getAttribute('aria-disabled')==='true'}}):[];
     for(const panel of all(root,'[role=tabpanel]'))if(parts.length&&!panels.includes(panel))panels.push(panel);
     if(parts.length&&!parts.some(p=>p.selected)){const active=panels.find(shown);const owner=active?[...partOf.entries()].find(([pn])=>pn===active):null;if(owner)parts.find(p=>p.part_id===owner[1]).selected=true;}
     // Identity must not change when the student switches tabs, so the identity stem and structure ignore the tab
     // panels' contents; the question TEXT sent to the model still includes the visible panel.
-    const identityExcluded=new Set([...excluded,...panels]);
-    const stem=renderedText(root,excluded),identityStem=parts.length?renderedText(root,identityExcluded):stem; const position=norm(document.querySelector('[aria-current=step],[aria-current=page],.question-number')?.textContent);
+    // A tab strip that declares no panels (McGraw's journal-entry worksheet: bare <input type=button role=tab> 1 2 3 4,
+    // no aria-controls, no tabpanel) still swaps its content on every click, and that content was in the identity:
+    // one click on tab 2 and the harness took the same question for a new one (Q12, 12:38 PM). When the page says
+    // nothing, the WIDGET is inferred, conservatively: the one tab group's nearest ancestor that holds a real answer
+    // control (never a tab or a button) and is not the question root itself; and only if an anchor survives outside
+    // it -- a question position read outside the widget AND at least 40 characters of question text -- so two
+    // questions that share a URL cannot fold into one key. The exclusion touches identity only; the model still
+    // reads the visible tab's text and controls. Declared panels are never widened.
+    const positionSelector='[aria-current=step],[aria-current=page],.question-number';
+    let widget=null,widgetReason='';
+    if(parts.length&&!panels.length){
+      const strips=new Set(parts.map(p=>p.tab.closest('[role=tablist]')||p.tab.parentElement));
+      const answerControl=e=>!e.matches('[role=tab],input[type=button],input[type=submit],input[type=reset]')&&!parts.some(p=>p.tab.contains(e));
+      if(strips.size!==1)widgetReason='more than one tab group';
+      else{let n=[...strips][0];while(n&&n!==root&&!elements.some(e=>answerControl(e)&&n.contains(e)))n=n.parentElement;
+        if(!n||n===root||!root.contains(n))widgetReason='no box below the question root holds both the tabs and an answer control';
+        else{const pos=norm([...document.querySelectorAll(positionSelector)].find(e=>!n.contains(e))?.textContent),outside=renderedText(root,new Set([...excluded,n])).text;
+          if(!pos)widgetReason='no question position outside the tab widget';else if(outside.length<40)widgetReason='fewer than 40 characters of question text outside the tab widget';else widget=n;}}
+    }
+    const identityExcluded=new Set([...excluded,...panels,...(widget?[widget]:[])]);
+    const stem=renderedText(root,excluded),identityStem=parts.length?renderedText(root,identityExcluded):stem;
+    const position=norm((widget?[...document.querySelectorAll(positionSelector)].find(e=>!widget.contains(e)):document.querySelector(positionSelector))?.textContent);
+    const tabSignature=widget?parts.length+':'+parts.map(p=>name(p.tab)||norm(p.tab.value)||'').join('/'):'';
     const platform=root.getAttribute('data-question-id')||'';
     const positionMatch=norm(document.body.innerText).match(/\bQuestion\s+(\d+)\s+(?:of|\/)\s*(\d+)\b/i);
     const enumeration=positionMatch?{index:Number(positionMatch[1]),total:Number(positionMatch[2])}:null;
@@ -352,17 +373,23 @@
     // counter or a "saved" annotation appearing after input does not fork the
     // question into a new key and abandon the verified answer.
     // Transient dropdown editors and expand buttons do not define a question.
-    const structure=[...elements,...(elements.length?[]:candidateMembers)].filter(e=>!e.matches('input[type=button],input[type=submit],input[type=reset]')&&!cells.some(c=>c!==e&&c.contains(e))&&!panels.some(pn=>pn.contains(e))).map(e=>key(e)).join(',');
+    const structure=[...elements,...(elements.length?[]:candidateMembers)].filter(e=>!e.matches('input[type=button],input[type=submit],input[type=reset]')&&!cells.some(c=>c!==e&&c.contains(e))&&!panels.some(pn=>pn.contains(e))&&!(widget&&widget.contains(e))).map(e=>key(e)).join(',');
     const question_key=hash(platform ? location.pathname+'|qid:'+platform
-      : location.pathname+'|'+location.hash+'|'+position+'|'+structure+'|'+identityStem.text);
+      : location.pathname+'|'+location.hash+'|'+position+'|'+structure+'|'+identityStem.text+(tabSignature?'|tabs:'+tabSignature:''));
+    // The ingredients, hashed, so the runtime can say WHICH one moved when the key does; part_content is the visible
+    // part's own text and controls (the settling signal for a tab switch), busy is the widget's aria-busy.
+    const partRoot=parts.length?([...partOf].find(([,id])=>id===(parts.find(p=>p.selected)?.part_id))?.[0]||widget||null):null;
+    const identity={stem:hash(identityStem.text),structure:hash(structure),position,tabs:tabSignature,panels:panels.length,inferred_widget:!!widget,...(widgetReason?{no_inference:widgetReason}:{}),
+      part_content:partRoot?hash(renderedText(partRoot,excluded).text+'|'+elements.filter(e=>partRoot.contains(e)).map(e=>key(e)).join(',')):null,busy:!!partRoot?.querySelector('[aria-busy=true]')||partRoot?.getAttribute('aria-busy')==='true'};
     if(classificationQuestion!==question_key){classificationQuestion=question_key;confirmedSheetValues=new Set();}
     const targets=new Map(),slots=[],groups=new Map();let incomplete=!stem.complete||elements.length>2000;
     const target=e=>{const token=key(e);if(targets.has(token)&&targets.get(token)!==e){incomplete=true;return token}targets.set(token,e);return token};
     const selectedPart=parts.find(p=>p.selected)?.part_id||null;const partFor=e=>{for(const [panel,id] of partOf)if(panel.contains(e))return id;return selectedPart};
+    const partScope=e=>{for(const [panel] of partOf)if(panel.contains(e))return 'panel';return widget&&widget.contains(e)?'inferred':'fallback'};
     // A slot key is unique across PARTS as well as within one: each tab's sheet here reuses the same cell ids
     // (0_table0_cell_c1_r4 is Operating Expenses on one tab and Cash on the other), so the key carries the part.
     const slotKey=e=>{const pid=parts.length?partFor(e):null;return question_key+'/'+(pid?pid.slice(5)+'/':'')+key(e)};
-    const add=(e,kind,label,options=[],current='')=>{const token=target(e);const slot={slot_key:slotKey(e),kind,label:label||kind,options,current,target:token,dom_id:e.id||null,disabled:e.disabled===true||e.getAttribute('aria-disabled')==='true',native:e.tagName==='SELECT',...(parts.length?{part_id:partFor(e)}:{})};slots.push(slot);return slot};
+    const add=(e,kind,label,options=[],current='')=>{const token=target(e);const slot={slot_key:slotKey(e),kind,label:label||kind,options,current,target:token,dom_id:e.id||null,disabled:e.disabled===true||e.getAttribute('aria-disabled')==='true',native:e.tagName==='SELECT',...(parts.length?{part_id:partFor(e),part_scope:partScope(e)}:{})};slots.push(slot);return slot};
     for(const e of elements){
       if(e.matches('input[type=radio],input[type=checkbox],[role=radio],[role=checkbox]')){
         const type=e.type||e.getAttribute('role'),group=e.closest('fieldset,[role=radiogroup],[role=group]')||root;
@@ -409,7 +436,7 @@
     const observation_id=crypto.randomUUID();
     const tableContext=readTables(root,excluded);
     const partList=parts.map(p=>({part_id:p.part_id,label:p.label,selected:p.selected,disabled:p.disabled,target:target(p.tab)}));
-    last={observation_id,question_key,document_id:doc,question:stem.text||norm(document.title),tables:tableContext.tables,table_context_complete:tableContext.complete,slots,menus,navigation,feedback,page_state,enumeration,parts:partList,
+    last={observation_id,question_key,identity,document_id:doc,question:stem.text||norm(document.title),tables:tableContext.tables,table_context_complete:tableContext.complete,slots,menus,navigation,feedback,page_state,enumeration,parts:partList,
       save_state:/\bsaved\b/i.test(feedback)?'confirmed':/\bsaving\b/i.test(feedback)?'pending':'unavailable',
       grade_state:/incorrect|wrong/i.test(feedback)?'incorrect':/partial/i.test(feedback)?'partial':/correct/i.test(feedback)?'correct':'unknown',
       discovery_complete:discovered.complete,completeness:{complete:!incomplete&&!limited,note:(incomplete||limited)?'QUESTION_INCOMPLETE: traversal or identity limit; inspect a smaller question.':''},targets,

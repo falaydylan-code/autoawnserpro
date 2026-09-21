@@ -1,0 +1,12 @@
+<!doctype html><meta charset="utf-8"><title>Worksheet in an iframe beside an always-present field</title>
+<style>body{font:16px sans-serif;margin:20px}main{max-width:900px}iframe{width:900px;height:600px;border:0}textarea{width:400px;height:40px}</style>
+<!-- The worksheet (worksheet_tabs.html, tabs rebuilt 300 ms after each click) lives in an iframe; the parent page
+     holds the chapter heading and a scratch-notes field that is ALWAYS present. While the iframe's tab is still
+     empty, the page as a whole still has an answer slot (the notes) -- a settled-part check that looks at the
+     whole page instead of the requested part's own frame would take the empty tab for a finished one. -->
+<main>
+  <h1>Chapter 4 homework</h1>
+  <p>Complete the worksheet below. Use the scratch notes for your workings; they are not graded.</p>
+  <textarea aria-label="Scratch notes"></textarea>
+  <iframe src="worksheet_tabs.html?delay=300"></iframe>
+</main>
