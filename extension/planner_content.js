@@ -106,8 +106,14 @@
       const resultCards=!attribute&&mode==='choice'&&/\b(?:answers|choices|options)\b/i.test(container.getAttribute('data-testid')||'')&&members.every(e=>e.matches('section[tabindex],button,[role=button]'))&&optionIds.every(id=>/^option-\d+$/.test(id))&&new Set(optionIds).size===members.length;
       const labels=members.map(e=>choiceLabel(e,container)),unique=labels.every(Boolean)&&new Set(labels).size===labels.length;
       const signature=JSON.stringify({members:members.map(key),labels,mode,attribute,resultCards});
-      const reason=!unique?'Answer labels are missing or repeated.':!mode?'Single or multiple selection is not established by the visible instructions.':!attribute&&!resultCards?'No supported selected-state readback; inspect the widget before answering.':'';
-      return {container,members,labels,mode,modeSource,attribute,resultCards,signature,reason,scope:text,ready:!reason};
+      // No DOM selected-state and not the result-icon contract: the SCREEN is the readback. The runtime confirms
+      // each click by the clicked member's own pixels changing (pointer parked off the group first) and, when the
+      // scope shows one, a counter moving by one -- "(5 left)", "2 of 5 selected". Only ever used when the DOM
+      // offers nothing; a state attribute or result icon keeps its path.
+      const counterMatch=/\((\d+)\s+left\)/i.exec(text)||/\b(\d+)\s+of\s+\d+\s+selected\b/i.exec(text),counter=counterMatch?Number(counterMatch[1]):null;
+      const verification=resultCards?'result_icon':attribute?'state_attribute':'visual_change';
+      const reason=!unique?'Answer labels are missing or repeated.':!mode?'Single or multiple selection is not established by the visible instructions.':'';
+      return {container,members,labels,mode,modeSource,attribute,resultCards,verification,counter,signature,reason,scope:text,ready:!reason};
     });
     found.complete=pool.length<=400;return found;
   }
@@ -387,7 +393,7 @@
       const kind=g.ready&&proof===signature&&!orphanedResult?g.mode:'unresolved';
       const current=g.attribute?g.members.flatMap((e,i)=>e.getAttribute(g.attribute)==='true'?[g.labels[i]]:[]):outcome?[receipt.label]:[];
       const s=add(g.container,kind,renderedText(g.container,new Set(g.members)).text||'Answer choices',g.labels,current);
-      s.interaction={adapter:'candidate_choices',evidence:{grouping:'repeated_siblings',selection_mode:g.mode,selection_mode_source:g.modeSource,state_attribute:g.attribute,verification:g.resultCards?'result_icon':'state_attribute',reason:orphanedResult?'Feedback is already present without a trusted execution receipt.':g.reason,ready:g.ready&&!orphanedResult},candidate_ids:g.members.map(target)};
+      s.interaction={adapter:'candidate_choices',evidence:{grouping:'repeated_siblings',selection_mode:g.mode,selection_mode_source:g.modeSource,state_attribute:g.attribute,verification:g.verification,counter:g.counter,reason:orphanedResult?'Feedback is already present without a trusted execution receipt.':g.reason,ready:g.ready&&!orphanedResult},candidate_ids:g.members.map(target)};
       s.choices=g.members.map((e,i)=>({label:g.labels[i],target:target(e),checked:current.includes(g.labels[i]),disabled:!!e.disabled||e.getAttribute('aria-disabled')==='true'}));
       s.disabled=s.choices.every(c=>c.disabled);s.discoverySignature=signature;
       s.result_feedback=!!(g.resultCards&&g.container.querySelector(resultIcon));

@@ -38,7 +38,22 @@ if(mode==='all')legend.textContent='Select all that apply:';
 if(mode==='conflict')legend.textContent='Choose 1 answer. Select all that apply.';   // the page contradicts itself: no claim may settle it
 if(mode==='noreadback')for(const b of document.querySelectorAll('ul[role=list] button'))b.removeAttribute('aria-pressed');   // Quizlet-like: nothing to read back
 const choices=[...document.querySelectorAll('ul[role=list] button')];
-for(const b of choices)b.onclick=()=>{window.clicks.push(b.getAttribute('aria-label'));const on=b.getAttribute('aria-pressed')!=='true';
+// Screen-readback modes: no aria-pressed anywhere; a selection is only a class (dark background) and a counter.
+//   visual       -- pick-many "Select all that apply (3 left)", six cards, counter moves by one per click
+//   visual_noop  -- same, but card C ignores clicks entirely (and every card has a hover glow that must not count)
+//   visual_grade -- same, but the page grades (role=status text) as soon as two cards are selected
+if(mode.startsWith('visual')){
+  legend.textContent='Select all that apply (3 left):';
+  const list=document.querySelector('ul[role=list]');
+  for(const [i,txt] of [['E','Rule of law'],['F','Free elections']])list.insertAdjacentHTML('beforeend',`<li><button type="button" aria-label="(Choice ${i})">${txt}</button></li>`);
+  const style=document.createElement('style');style.textContent='ul[role=list] button.selected{background:#1b3a6b;color:#fff;border-color:#1b3a6b}ul[role=list] button:hover{background:#dbe6ff}';document.head.append(style);
+  let left=3;const status=document.createElement('div');status.setAttribute('role','status');document.querySelector('main').append(status);
+  for(const b of document.querySelectorAll('ul[role=list] button')){b.removeAttribute('aria-pressed');
+    b.onclick=()=>{window.clicks.push(b.getAttribute('aria-label'));if(mode==='visual_noop'&&b.getAttribute('aria-label')==='(Choice C)')return;
+      const on=!b.classList.contains('selected');b.classList.toggle('selected',on);left+=on?-1:1;legend.textContent=`Select all that apply (${left} left):`;
+      if(mode==='visual_grade'&&document.querySelectorAll('ul[role=list] button.selected').length===2)status.textContent='Checked: your answer was recorded.';}}
+}
+if(!mode.startsWith('visual'))for(const b of choices)b.onclick=()=>{window.clicks.push(b.getAttribute('aria-label'));const on=b.getAttribute('aria-pressed')!=='true';
   if(mode!=='all')for(const o of choices)o.setAttribute('aria-pressed','false');
   b.setAttribute('aria-pressed',on?'true':'false')};
 </script>

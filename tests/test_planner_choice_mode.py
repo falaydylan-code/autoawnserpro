@@ -130,12 +130,14 @@ def test_a_page_that_contradicts_itself_refuses_the_reading_before_any_click(ext
     assert page.evaluate('clicks') == []
 
 
-def test_a_group_with_no_readback_cannot_be_planned_at_all(extension):
+def test_a_group_whose_selection_shows_nowhere_gets_one_honest_click_then_stops(extension):
+    # No aria-pressed and no visible change on click: the screen readback (0.10.41) makes the group plannable, the
+    # first click is judged by the card's own pixels, nothing changed, and that card is never clicked again.
     page, w, tid = navigate(extension, 'choice_mode.html?mode=noreadback')
     w.evaluate(BOOT, tid)
     slot = resolve(w)['slots'][0]
-    assert slot['kind'] == 'unresolved' and slot['evidence']['reason'].startswith('No supported selected-state readback')
+    assert slot['kind'] == 'choice' and slot['evidence']['verification'] == 'visual_change'
     result = plan_directly(w, tid)
     assert result['status'] == 'needs_review'
-    assert any(e['failure_code'] == 'QUESTION_INCOMPLETE' for e in result['events'])
-    assert page.evaluate('clicks') == []
+    assert any(e['detail'] == 'Screen readback did not confirm the click' for e in result['events'])
+    assert page.evaluate('clicks') == ['(Choice A)']                            # one click, no repeat on a card that showed nothing

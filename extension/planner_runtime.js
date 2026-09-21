@@ -149,7 +149,11 @@
       return obs;
     }
     same(obs){if(!this.current||obs.question_key!==this.current.key||obs.document_id!==this.current.document)throw new Fault('TARGET_STALE','Question or document changed; pending task discarded.')}
-    slot(obs,key){this.same(obs);const s=obs.slots.filter(s=>s.slot_key===key);if(s.length===1&&!s[0].geometry?.calibrated&&this.current.visual?.[key]){s[0].geometry=this.current.visual[key];s[0].current=s[0].geometry.points;}if(s.length!==1)throw new Fault(s.length?'TARGET_AMBIGUOUS':'TARGET_MISSING','Logical answer slot is not unique.');return s[0]}
+    slot(obs,key){this.same(obs);const s=obs.slots.filter(s=>s.slot_key===key);if(s.length===1&&!s[0].geometry?.calibrated&&this.current.visual?.[key]){s[0].geometry=this.current.visual[key];s[0].current=s[0].geometry.points;}
+      // A group with no DOM selected-state cannot report what is selected; the harness remembers what it confirmed
+      // on screen, and every readback of that slot goes through this memory.
+      if(s.length===1&&s[0].interaction?.evidence?.verification==='visual_change'){const seen=this.current?.visualSelections?.[key]||[];s[0].current=[...seen];for(const c of s[0].choices||[])c.checked=seen.includes(c.label);}
+      if(s.length!==1)throw new Fault(s.length?'TARGET_AMBIGUOUS':'TARGET_MISSING','Logical answer slot is not unique.');return s[0]}
     async inspect(frame,target,operation='measure_target',extra={}){await this.guard();let r;try{r=await chrome.tabs.sendMessage(this.tabId,{type:'planner_inspect',operation,target,document_id:frame.document_id,observation_id:frame.observation_id,...extra},{frameId:frame.frame_id})}catch{await this.guard();throw new Fault('FRAME_UNREADABLE','The target frame stopped responding during inspection.')}requireOK(r);if(r.local&&!r.viewport&&frame.measured_offset)r.viewport={...r.local,x:r.local.x+frame.measured_offset.x,y:r.local.y+frame.measured_offset.y};for(const c of r.scroll?.containers||r.containers||[]){if(c.local&&!c.viewport&&frame.measured_offset)c.viewport={...c.local,x:c.local.x+frame.measured_offset.x,y:c.local.y+frame.measured_offset.y}}return r}
     async measure(frame,target,context={}){
       const check={...(context.menu_owner?{expected_menu_owner:context.menu_owner}:{}),...(context.value_owner?{expected_value_owner:context.value_owner}:{}),...(['activate_cell','discover_activate_cell','identify_cell','identify_editor'].includes(context.purpose)?{activation_only:true}:{})};
@@ -241,6 +245,50 @@
     }
     async key(key){await this.guard();return AssignmentVisual.key(this.tabId,key,()=>this.cancelled||this.b.stopped())}
     async modelCall(phase,body){const start=Date.now();try{return await this.b.request(phase,body,this.abort.signal)}finally{this.current?.recovery?.exclude(Date.now()-start)}}
+    // Visual readback for choice groups with no DOM selected-state (Quizlet's cards, any styled tile): the clicked
+    // member's own pixels before vs after, with the pointer parked off the group so hover styling cannot pass for a
+    // selection, plus the page's own counter when it shows one. What was confirmed is remembered in
+    // this.current.visualSelections and served back through slot(); nothing else reads these groups' state.
+    async park(frame,groupTarget){
+      const v=await this.b.viewport(this.tabId);let box=null;try{box=(await this.inspect(frame,groupTarget)).viewport}catch{box=null}
+      const pt=box&&box.y>40?{x:Math.min(v.width-4,Math.max(4,box.x+box.w/2)),y:Math.max(4,box.y-24)}:box&&box.y+box.h<v.height-40?{x:Math.min(v.width-4,Math.max(4,box.x+box.w/2)),y:box.y+box.h+24}:{x:4,y:4};
+      await AssignmentVisual.move(this.tabId,pt,()=>this.cancelled||this.b.stopped());await sleep(120);return pt;
+    }
+    async cropPixels(box){
+      // A clipped capture, in CSS pixels, of exactly this box. A full-surface screenshot cannot be cropped by the
+      // layout-metrics ratio: under automation the surface is smaller than the layout viewport (infobar, scrollbar)
+      // and the ratio lands the crop on the wrong pixels.
+      const v=await this.b.viewport(this.tabId);
+      if(box.x<0||box.y<0||box.x+box.w>v.width||box.y+box.h>v.height||box.w<4||box.h<4)throw new Fault('GUARD_REJECTED','The choice was not fully visible for a screen readback.');
+      await AssignmentVisual.attach(this.tabId);
+      const shot=await chrome.debugger.sendCommand({tabId:this.tabId},'Page.captureScreenshot',{format:'png',fromSurface:true,captureBeyondViewport:false,clip:{x:box.x,y:box.y,width:box.w,height:box.h,scale:1}});
+      const bitmap=await createImageBitmap(await (await fetch('data:image/png;base64,'+shot.data)).blob());
+      const canvas=new OffscreenCanvas(bitmap.width,bitmap.height),ctx=canvas.getContext('2d');ctx.drawImage(bitmap,0,0);bitmap.close();
+      return ctx.getImageData(0,0,canvas.width,canvas.height).data;
+    }
+    changedFraction(a,b){if(a.length!==b.length)return 1;let changed=0;const n=a.length/4;for(let i=0;i<a.length;i+=4){if(Math.abs(a[i]-b[i])>24||Math.abs(a[i+1]-b[i+1])>24||Math.abs(a[i+2]-b[i+2])>24)changed++}return changed/n}
+    async visualToggle(task,s,c,want){
+      const key=task.slot_key,memory=this.current.visualSelections||={},dead=this.current.visualDead||={};
+      // A card that showed no change when clicked is not clicked again: on a toggle a second click could undo an
+      // invisible selection, and there is no witness either way. One honest click, then the question stops.
+      if((dead[key]||[]).includes(c.label))throw new Fault('GUARD_REJECTED',`"${c.label}" showed no visible change when it was clicked; it will not be clicked again.`,{slot_key:key,matched_option:c.label});
+      const before=await this.measure(s.frame,c.target,{purpose:want?'check_choice':'uncheck_choice'}),box=before.viewport;
+      await this.park(s.frame,s.target);const pixelsBefore=await this.cropPixels(box);const counterBefore=s.interaction?.evidence?.counter??null;
+      await this.click(s.frame,c.target,this.answerClick(task,s,want?'check_choice':'uncheck_choice',want?'This choice is in the planned answer set and is not yet confirmed selected.':'This choice is outside the planned answer set and was confirmed selected.',{matched_option:c.label,checked_before:c.checked,checked_wanted:want,readback:'visual_change'}));
+      await this.park(s.frame,s.target);const pixelsAfter=await this.cropPixels(box),changed=this.changedFraction(pixelsBefore,pixelsAfter);
+      const obs=await this.observe(),fresh=this.slot(obs,key),counterAfter=fresh.interaction?.evidence?.counter??null;
+      const counterOk=counterBefore==null||counterAfter==null||counterAfter===counterBefore+(want?-1:1);
+      const detail={slot_key:key,matched_option:c.label,pixels_changed:Math.round(changed*1000)/10+'%',counter:counterBefore==null?'none':counterBefore+' -> '+counterAfter,checked_wanted:want};
+      if(changed<0.01||!counterOk){dead[key]=[...(dead[key]||[]),c.label];await this.persist();await this.event('VERIFY','Screen readback did not confirm the click',{...detail,entry_verified:false});
+        throw new Fault('INPUT_NO_EFFECT',changed<0.01?'The clicked choice did not visibly change.':'The page counter did not move by one after the click.',detail);}
+      memory[key]=want?[...new Set([...(memory[key]||[]),c.label])]:(memory[key]||[]).filter(l=>l!==c.label);await this.persist();
+      await this.event('VERIFY','Screen readback confirmed the click',{...detail,entry_verified:true,readback:'visual_change (pixel change + counter)'});
+      // The page graded on this click (feedback appeared): the attempt is spent. Nothing more is clicked on this group
+      // and no whole-page screenshot goes to the model, so a revealed answer never reaches it.
+      if(obs.feedback||obs.slots.some(x=>x.result_feedback)||obs.grade_state!=='unknown'){this.current.graded||={};this.current.graded[key]=true;
+        const wanted=task.operation==='choose_one'?[task.desired.label]:task.desired.labels,missing=wanted.filter(l=>!memory[key].includes(l));
+        if(missing.length)throw new Fault('GUARD_REJECTED',`The page graded before every planned choice was entered; ${missing.length} choice(s) were not clicked and nothing more will be.`,{missing});}
+    }
     modeAssertable(s){const e=s?.interaction?.evidence;return s?.kind==='unresolved'&&s.interaction?.adapter==='candidate_choices'&&String(e?.reason||'').startsWith('Single or multiple selection')&&!!(e?.state_attribute||e?.verification==='result_icon')}
     async noteAssertion(s,result){if(!result?.asserted_mode)return;const word=result.asserted_mode==='choice'?'pick one':'pick many';
       await this.event('INSPECT',result.accepted?`Model read this group as ${word}; accepted because the page text says neither`:`Model read this group as ${word}; not accepted`,{slot_key:s.slot_key,adapter:'candidate_choices',asserted_mode:result.asserted_mode,accepted:!!result.accepted,actual:result.evidence,action_executed:false})}
@@ -283,7 +331,9 @@
         for(const label of s.choices.map(c=>c.label)){obs=await this.observe();s=this.slot(obs,task.slot_key);const c=s.choices.find(c=>c.label===label),want=wanted.some(w=>norm(w)===norm(label));
           if(c.checked===want||task.operation==='choose_one'&&!want)continue;
           if(s.interaction?.evidence?.verification==='result_icon')await this.inspect(s.frame,c.target,'begin_choice',{expected_choice_owner:s.local_slot,expected_label:c.label});
-          if(c.disabled)throw new Fault('GUARD_REJECTED','Desired choice is disabled.');await this.click(s.frame,c.target,this.answerClick(task,s,want?'check_choice':'uncheck_choice',want?'This choice is in the planned answer set and is currently unchecked.':'This choice is outside the planned answer set and is currently checked.',{matched_option:c.label,checked_before:c.checked,checked_wanted:want}));
+          if(c.disabled)throw new Fault('GUARD_REJECTED','Desired choice is disabled.');
+          if(s.interaction?.evidence?.verification==='visual_change'){await this.visualToggle(task,s,c,want);continue}
+          await this.click(s.frame,c.target,this.answerClick(task,s,want?'check_choice':'uncheck_choice',want?'This choice is in the planned answer set and is currently unchecked.':'This choice is outside the planned answer set and is currently checked.',{matched_option:c.label,checked_before:c.checked,checked_wanted:want}));
           if(s.interaction?.evidence?.verification==='result_icon')return this.waitTask(task);
           await sleep(70);}
       }else if(task.operation==='enter_value'){
@@ -835,6 +885,7 @@
       for(const t of this.current.plan.tasks){
         if(!this.current.completed[t.slot_key]||plannedValue(t)==='')continue;
         if(!obs.slots.some(x=>x.slot_key===t.slot_key))continue;   // another part's slot: confirmed when that part is shown
+        if(this.current.graded?.[t.slot_key])continue;                 // screen-readback group the page already graded: its icons are the witness, the model sees no revealed key
         const s=this.slot(obs,t.slot_key);let box=null;try{box=(await this.inspect(s.frame,s.target)).viewport}catch{box=null}
         if(!box||box.y+box.h<0||box.y>v.height||box.x+box.w<0||box.x>v.width)continue;
         expected.push({slot_key:t.slot_key,label:s.label,value:t.operation==='enter_value'&&s.current!=null&&String(s.current)!==''?String(s.current):plannedValue(t)});
