@@ -22,7 +22,8 @@ def test_live_question_and_full_choice_text_survive_discovery(extension):
     assert page.evaluate('clicks')==[]
 
 
-@pytest.mark.parametrize('mode,kind,count',[('multiple','choice_set',1),('two','choice',2),('ambiguous','unresolved',1),('cards','unresolved',1)])
+# 'cards' (tabindex-only sections, no state attribute) became answerable in 0.10.41: the screen is their readback.
+@pytest.mark.parametrize('mode,kind,count',[('multiple','choice_set',1),('two','choice',2),('ambiguous','unresolved',1),('cards','choice',1)])
 def test_group_scope_and_unproved_semantics(extension,mode,kind,count):
     page,w,tid=navigate(extension,'planner_discovery.html?mode='+mode)
     before=w.evaluate(BOOT,tid)
