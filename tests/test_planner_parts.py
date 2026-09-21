@@ -149,3 +149,28 @@ def test_dropdown_inside_a_part_is_chosen_after_its_owner_is_confirmed(extension
     commits = {(c['panel'], c['id']): c['raw'] for c in page.evaluate('commits')}
     assert commits[('panel-1', '0_table0_cell_c0_r2')] == 'For the Month Ended March 31' and commits[('panel-2', '0_table0_cell_c0_r2')] == 'For the Month Ended March 31'
     assert len(commits) == 8
+
+
+def test_a_retry_after_an_all_thinking_reply_still_plans_every_part(extension):
+    # M4-14 (1:31 PM): the first plan call came back all thinking; the retry re-observed only the tab on screen, so
+    # "Required 2" fell out of the request, the model planned the tab it was shown, and the plan was refused against
+    # the two-tab union. A retry re-asks the same question with the same multi-part observation.
+    page, w, tid = navigate(extension, 'tabs_parts.html')
+    result = w.evaluate('''async ({id,values})=>{const h=__assignmentHarness;await AssignmentVisual.attach(id);
+      const bridge=h.plannerBridge();bridge.config=async()=>({advance:false,auto_submit:false,spend_limit:2,model:'test'});
+      globalThis.planBodies=[];
+      bridge.request=async(phase,body)=>{
+        if(phase==='verify')return {cost:.001,response:{kind:'verified'}};
+        globalThis.planBodies.push(body.observation);
+        if(globalThis.planBodies.length===1)return {cost:.012,provider:'AtlasCloud',reasoning_tokens:15900,output_tokens:15900,detail:'TRUNCATED_BY_THINKING: reply cut off -- 15900 of 15900 output tokens went to thinking, none to the answer (provider AtlasCloud).'};
+        const tasks=body.observation.slots.map((s,i)=>({task_id:'t'+i,slot_key:s.slot_key,operation:'enter_value',desired:{value:values[s.label]??'1'},depends_on:[]}));
+        return {cost:.004,provider:'Parasail',reasoning_tokens:300,response:{kind:'plan',question_key:body.observation.question_key,observation_id:body.observation.observation_id,tasks,parts_declared:2}};};
+      const engine=new AssignmentPlanner.Engine(bridge,id,await bridge.config());const r=await engine.run();
+      return {status:r.status,events:r.events.map(e=>e.detail),bodies:globalThis.planBodies.map(o=>({slots:o.slots.length,parts:(o.parts||[]).map(p=>p.slots),id:o.observation_id}))};}''',
+      {'id': tid, 'values': VALUES})
+    assert result['status'] == 'finished', result['events'][-3:]
+    assert [b['slots'] for b in result['bodies']] == [5, 5]                    # the retry saw both tabs, not the one on screen
+    assert [b['parts'] for b in result['bodies']] == [[3, 2], [3, 2]]
+    assert result['bodies'][0]['id'] != result['bodies'][1]['id']              # a fresh observation id, same content
+    for cell, value in [('#rev', '139000'), ('#exp', '91300'), ('#net', '47700'), ('#cash', '34800'), ('#assets', '103200')]:
+        assert page.locator(cell).input_value() == value, cell

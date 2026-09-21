@@ -632,6 +632,10 @@
       if(Number.isFinite(data.cost)){this.ledger.cost+=data.cost;this.ledger.pending_request=null}
       await this.persist();await this.guard();if(generation!==this.generation)throw new Fault('CANCELLED','Discarded late model response.');
       const fresh=await this.observe();if(fresh.question_key!==obs.question_key||fresh.document_id!==obs.document_id)throw new Fault('TARGET_STALE','Discarded model response after question/document changed.');
+      // A retry re-asks the SAME question. `fresh` sees only the tab on screen; a multi-part observation (the union
+      // revealParts built) is re-sent whole, or the retry silently drops the other tabs' slots and the plan is then
+      // refused against the union (M4-14, 1:31 PM: Required 2 vanished from the retry after an all-thinking reply).
+      const again=obs.parts?.length>1?{...obs,observation_id:crypto.randomUUID()}:fresh;
       const diagnostic={model_calls:1,cost:data.cost,input_tokens:data.input_tokens,output_tokens:data.output_tokens,reasoning_tokens:data.reasoning_tokens,duration:Date.now()-start,
         request_id:body.request_id,observation_id:obs.observation_id,model:data.model||body.model||'(backend default)',requested_model:body.model||'',provider:data.provider||undefined,
         finish_reason:data.finish_reason,raw:data.raw_reply,detail:data.response?.reason||data.detail||'',response_kind:data.response?.kind,output_format:data.output_format,format_corrections:data.format_corrections};
@@ -642,17 +646,17 @@
           this.current.formatCorrections=1;await this.persist();
           this.mergeEvidence([{operation:'format_correction',instruction:'The previous reply was invalid JSON and was not executed. Return exactly one valid JSON object for this fresh observation.'}],fresh);
           await this.event(task?'REPAIR':'PLAN','Requesting one JSON format correction; rejected output was not executed',{failure_code:code,correction_attempt:1});
-          return this.paid(fresh,task,error,false,true);
+          return this.paid(again,task,error,false,true);
         }
         if(code==='TARGET_MISSING'&&data.inspection_correction?.kind==='inspection_target'&&Number.isFinite(data.cost)&&!this.ledger.pending_request){
           if(!this.current.inspectionTargetCorrections){
             this.current.inspectionTargetCorrections=1; // durable per-question limit, including resume/replanning
             const correction={operation:'inspection_request_correction',rejected_slot_key:data.inspection_correction.rejected_slot_key,
               instruction:'The rejected inspection was NOT executed. Use an exact offered slot_key for inspect_options, or slot_key="" with inspect_question (or a script-only request) to discover missing controls.',
-              offered_slots:fresh.slots.map(s=>({slot_key:s.slot_key,label:s.label,kind:s.kind}))};
+              offered_slots:again.slots.map(s=>({slot_key:s.slot_key,label:s.label,kind:s.kind}))};
             this.mergeEvidence([correction],fresh);
             await this.event(task?'REPAIR':'PLAN','Correcting the inspection target once; no page action executed',{failure_code:code,correction_attempt:1});
-            return this.paid(fresh,task,error,true);
+            return this.paid(again,task,error,true);
           }
           await this.event(task?'REPAIR':'PLAN','Inspection target correction exhausted; stopping without page actions',{failure_code:code});
         }
@@ -663,9 +667,9 @@
           const hints=this.current.planHints||={avoid_providers:[],reasoning_mode:''};
           // One provider retry, then thinking off: the question has three plan calls in total.
           if(data.provider&&!hints.avoid_providers.length&&!hints.reasoning_mode){hints.avoid_providers.push(data.provider);await this.persist();
-            await this.event(task?'REPAIR':'PLAN',`Reply was all thinking (${data.reasoning_tokens||'?'} tokens) and no answer; retrying without provider ${data.provider}`,{failure_code:code,avoid_providers:hints.avoid_providers});return this.paid(fresh,task,error);}
+            await this.event(task?'REPAIR':'PLAN',`Reply was all thinking (${data.reasoning_tokens||'?'} tokens) and no answer; retrying without provider ${data.provider}`,{failure_code:code,avoid_providers:hints.avoid_providers});return this.paid(again,task,error);}
           if(!hints.reasoning_mode){hints.reasoning_mode='off';await this.persist();
-            await this.event(task?'REPAIR':'PLAN','Reply was all thinking and no answer again; retrying with thinking off',{failure_code:code});return this.paid(fresh,task,error);}
+            await this.event(task?'REPAIR':'PLAN','Reply was all thinking and no answer again; retrying with thinking off',{failure_code:code});return this.paid(again,task,error);}
         }
         throw new Fault(code,(data.detail||'Backend returned no plan.').replace(new RegExp('^'+code+':\\s*'),''));
       }
