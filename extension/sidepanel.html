@@ -9,98 +9,112 @@
 <body>
 
 <header>
-  <img class="brand-logo" src="icons/logo.png" width="32" height="32" alt=""><span class="brand">Assignment Lab <small>2.0</small></span>
+  <div class="brand-lockup">
+    <img class="brand-logo" src="icons/logo.png" width="36" height="36" alt="">
+    <span class="brand">Assignment Lab</span>
+  </div>
   <button id="settings-toggle" class="icon-button" aria-label="Open settings" aria-expanded="false">&#9881;</button>
-  <button id="eth" class="eth off" type="button" aria-pressed="false"
-          title="Browser control is off. Click to arm it.">ETH</button>
+  <button id="eth" class="enable off" type="button" aria-pressed="false"
+          title="Browser access is off. Click to enable it.">Enable</button>
 </header>
 
 <main>
-  <p id="page" class="page">Open the assignment tab, then arm ETH.</p>
-  <p class="hint" style="margin:0 0 10px">ETH green means the agent may read pages. Chrome asks once, the first time you arm it.</p>
-
-  <div id="banner" class="banner" hidden></div>
-
   <section id="workspace">
-  <div id="status-pill" class="status-pill" role="status">Ready</div>
-  <div class="welcome"><h1 id="task-title">Ready when you are</h1><p id="task-description">Work through your assignment,<br>one step at a time.</p></div>
-  <div class="progress-card">
-  <p id="progress" role="status" aria-live="polite">No parts planned yet.</p>
+    <div class="page-row">
+      <span class="page-label">Current tab</span>
+      <p id="page" class="page">Open your assignment tab.</p>
+    </div>
 
-  <progress id="part-meter" max="1" value="0" aria-label="Verified parts"></progress>
-  </div>
-  <div id="activity-card" class="activity-card"><span class="activity-icon" aria-hidden="true">&#10022;</span><div><strong id="activity-title">Your next step</strong><p id="activity-detail">Enable ETH browser access, then start your assignment.</p></div></div>
-  <div class="controls">
-    <button id="start" class="primary" disabled>&#9654; &nbsp; Start assignment</button>
-    <button id="stop" disabled>Stop</button>
-  </div>
+    <div id="banner" class="banner" hidden></div>
 
-  <div class="meters">
-    <div><span>QUESTIONS</span><strong id="questions">0</strong></div>
-    <div><span>STEPS</span><strong id="steps">0</strong></div>
-    <div><span>COST</span><strong id="cost">$0.0000</strong></div>
-  </div>
+    <div class="hero-panel">
+      <div id="status-pill" class="status-pill" role="status">Ready</div>
+      <div class="welcome">
+        <h1 id="task-title">Ready to start</h1>
+        <p id="task-description">Choose a model, enable access, and begin.</p>
+      </div>
+    </div>
 
-  <details id="activity-log" open><summary>Activity log</summary>
-  <div class="logbar">
-    <label class="check"><input id="showthink" type="checkbox" checked> Show model thinking</label>
-    <span class="grow"></span>
-    <button id="copylog" class="quiet">Copy log</button>
-  </div>
-  <ol id="log" class="log"><li class="muted">Nothing yet.</li></ol>
+    <div class="home-settings" aria-label="Run settings">
+      <label class="field home-model" for="model">
+        <span>Model</span>
+        <select id="model">
+          <option value="">Backend default (MiniMax)</option>
+          <option value="minimax/minimax-m3">MiniMax M3 - cheapest</option>
+          <option value="qwen/qwen3-vl-235b-a22b-instruct">Qwen3-VL 235B</option>
+          <option value="z-ai/glm-4.6v">GLM-4.6V</option>
+          <option value="x-ai/grok-4.6">Grok 4.6 - frontier reasoning</option>
+          <option value="moonshotai/kimi-k3">Kimi K3 - most expensive</option>
+        </select>
+      </label>
+      <label class="switch-row" for="advance">
+        <span><strong>Auto Continue</strong><small>Move to the next question when finished</small></span>
+        <input id="advance" class="switch" type="checkbox" role="switch">
+      </label>
+      <label class="switch-row" for="show-cost">
+        <span><strong>Show cost</strong><small>Display live usage on this page</small></span>
+        <input id="show-cost" class="switch" type="checkbox" role="switch" checked>
+      </label>
+    </div>
 
-  </details>
+    <div class="controls">
+      <button id="start" class="primary" disabled>Start assignment</button>
+      <button id="stop" disabled>Stop</button>
+    </div>
+
+    <div class="meters" aria-label="Run totals">
+      <div><span>QUESTIONS</span><strong id="questions">0</strong></div>
+      <div><span>COST</span><strong id="cost">$0.0000</strong></div>
+    </div>
+
+    <div id="activity-card" class="activity-card">
+      <span class="activity-mark" aria-hidden="true"></span>
+      <div><strong id="activity-title">Waiting to begin</strong><p id="activity-detail">Enable browser access, then start your assignment.</p></div>
+    </div>
+
+    <div id="progress-card" class="progress-card" hidden>
+      <p id="progress" role="status" aria-live="polite"></p>
+      <progress id="part-meter" max="1" value="0" aria-label="Verified parts"></progress>
+    </div>
+
+    <details id="activity-log" open>
+      <summary>Activity log</summary>
+      <ol id="log" class="log"><li class="muted">Nothing yet.</li></ol>
+    </details>
   </section>
-  <section id="settings-view" hidden><div class="settings-heading"><h1>Settings</h1><button id="settings-back">Done</button></div>
-  <h2>Assignment behavior</h2>
 
-  <p class="hint">Plans each question, enters the answers, and verifies results. Requests extra inspection only when information is missing.</p>
-  <label class="check"><input id="check_work" type="checkbox"> Check work once after entry</label><p class="hint">May consume a website attempt. Off by default.</p>
-  <button id="resume-run" type="button">Resume saved planner run</button>
+  <section id="settings-view" hidden>
+    <div class="settings-heading"><h1>Settings</h1><button id="settings-back">Done</button></div>
 
-  <label class="check"><input id="advance" type="checkbox">
-    Keep going after each question</label>
-  <p class="hint" style="margin:2px 0 10px">Lets the agent press Next, Continue or a
-    confidence rating after all parts are verified. Part tabs remain usable when this is off.</p>
-  <label class="check"><input id="auto_submit" type="checkbox"> Hand in when every known part is verified</label>
-  <p class="hint">Off by default. Verification confirms entered values, not academic correctness.</p>
-  <p class="hint" style="margin:6px 0 10px"><strong>Why Chrome mentions debugging.</strong> Some answer
-    boxes (McGraw Hill dropdowns, drag-to-order lists) give the page no control the agent can
-    press. For those it briefly uses Chrome's own mouse input, which Chrome labels
-    "debugging" and shows as a bar across the tab. It attaches only to your assignment tab,
-    only while a run needs it, and lets go on Stop, ETH off, or when the run ends.</p>
+    <h2>Assignment behavior</h2>
+    <label class="check"><input id="check_work" type="checkbox"> Check work once after entry</label>
+    <p class="hint">May consume a website attempt. Off by default.</p>
+    <label class="check"><input id="auto_submit" type="checkbox"> Hand in when every known part is verified</label>
+    <p class="hint">Verification confirms entered values, not academic correctness.</p>
+    <button id="resume-run" type="button">Resume saved planner run</button>
 
-  <h2>Display</h2>
-  <label class="check"><input id="show-log" type="checkbox" checked> Show activity log</label>
-  <label class="check"><input id="show-cost" type="checkbox" checked> Show usage cost</label>
-  <h2>Connection</h2>
-  <details id="setup">
-    <summary>Setup</summary>
-    <label>Backend<input id="backend" type="url" spellcheck="false"></label>
-    <label>Model<select id="model">
-      <option value="">Backend default (MiniMax)</option>
-      <option value="minimax/minimax-m3">MiniMax M3 — cheapest</option>
-      <option value="qwen/qwen3-vl-235b-a22b-instruct">Qwen3-VL 235B</option>
-      <option value="z-ai/glm-4.6v">GLM-4.6V</option>
-      <option value="x-ai/grok-4.6">Grok 4.6 — frontier reasoning</option>
-      <option value="moonshotai/kimi-k3">Kimi K3 — most expensive</option>
-    </select></label>
-    <label>Note for the agent (optional)<input id="note" type="text" maxlength="200" placeholder="e.g. answer in decimals"></label>
-    <label>Stop a run after spending ($)<input id="spend_limit" type="number" min="0.10" step="0.10" placeholder="2.00"></label>
-    <p class="hint">There is no limit on questions or turns; a run goes until the assignment is
-      complete, you press Stop, it needs you, or this amount is spent.</p>
-    <button id="save">Save</button>
-    <p class="hint">Your API key never lives in this extension. Requests go to your
-      backend, which holds the key and meters the spend.</p>
-  </details>
+    <h2>Activity and diagnostics</h2>
+    <label class="check"><input id="show-log" type="checkbox" checked> Show activity log on Home</label>
+    <label class="check"><input id="showthink" type="checkbox" checked> Show model thinking in the log</label>
+    <button id="copylog" class="secondary-action">Copy log</button>
 
-  <p class="hint">
-    The agent looks at the page each step and decides one action. It will not sign in,
-    enter payment details, accept banners, or solve captchas.
-    Hand-in requires the switch above and a completed, verified parts checklist.
-  </p>
+    <h2>Connection</h2>
+    <details id="setup">
+      <summary>Advanced setup</summary>
+      <label class="field" for="backend"><span>Backend</span><input id="backend" type="url" spellcheck="false"></label>
+      <label class="field" for="note"><span>Note for the agent (optional)</span><input id="note" type="text" maxlength="200" placeholder="e.g. answer in decimals"></label>
+      <label class="field" for="spend_limit"><span>Stop a run after spending ($)</span><input id="spend_limit" type="number" min="0.10" step="0.10" placeholder="2.00"></label>
+      <p class="hint">A run continues until the assignment is complete, you press Stop, it needs you, or this amount is spent.</p>
+      <button id="save">Save connection</button>
+      <p class="hint">Your API key stays on the backend.</p>
+    </details>
+
+    <details class="explanation">
+      <summary>Why Chrome mentions debugging</summary>
+      <p class="hint">Some answer controls require Chrome's own mouse input. Assignment Lab attaches only to your assignment tab and releases it on Stop, Disable, or when the run ends.</p>
+    </details>
+    <p class="safety-note">Assignment Lab will not sign in, enter payment details, accept banners, or solve captchas.</p>
   </section>
-  <footer><span id="continue-summary">Auto-continue off</span><span id="submit-summary">Submission off</span></footer>
 </main>
 
 <script src="sidepanel.js"></script>

@@ -23,8 +23,8 @@ defines it, but Chrome needs the folder around it.
 
 1. Open your assignment in a normal tab and sign in as usual.
 2. Click the Assignment Lab icon. The side panel opens.
-3. Click **ETH** so it turns green. Red means the agent cannot touch any page.
-4. Click **Read this page**.
+3. Click **Enable** to grant browser access.
+4. Choose a model and click **Start assignment**.
 
 The run is **bound to that tab**. You can switch to other tabs and keep working;
 the agent carries on in the assignment tab, takes its screenshots there, and
@@ -45,7 +45,7 @@ Every move is **real browser input** in your tab — a real mouse click at the
 control's position, real keystrokes, a real drag with the button held — driven
 through Chrome's own input channel. Chrome calls that channel "debugging" and
 shows a bar across the tab while a run is on. It attaches only to the assignment
-tab, only during a run, and lets go on Stop, ETH off, or when the run ends.
+tab, only during a run, and lets go on Stop, Disable, or when the run ends.
 Press **Cancel** on that bar and the run stops.
 
 The page's structure is used to *find* controls and to *read back* what they
@@ -87,12 +87,13 @@ the page allows another try, it takes it.
 
 ## Settings
 
-Open **Setup** in the side panel.
+Choose the model and Auto Continue behavior on Home. Open **Settings**, then
+**Advanced setup**, for connection details.
 
 - **Backend** — where the thinking happens. Defaults to your Railway service.
   Your OpenRouter key lives there, never in this extension.
-- **Model** — leave blank for the backend default (MiniMax M3). It must accept
-  images.
+- **Model** — choose it on Home, or leave the backend default selected. It must
+  accept images.
 - **Note for the agent** — optional, e.g. "answer in decimals".
 - **Stop a run after spending ($)** — the only hard ceiling. Default $2.00.
 
@@ -102,17 +103,17 @@ silent loop.
 
 ## Site access
 
-**ETH is the approval.** The first time you turn it green, Chrome asks once
-whether Assignment Lab may read your sites. Turn ETH red and a run in progress
-stops and the site access is handed back. The only site the extension can
-always reach is its own backend.
+**Enable is the approval.** The first time you enable browser access, Chrome asks
+once whether Assignment Lab may read your sites. Disable it and a run in
+progress stops and the site access is handed back. The only site the extension
+can always reach is its own backend.
 
 ## Limits
 
 There is no limit on questions or turns. What stops a run:
 
 - the assignment reports it is complete
-- you press Stop, or turn ETH red, or close the tab
+- you press Stop, disable browser access, or close the tab
 - the spending limit in Setup
 - six turns in a row with no verified progress, or the same move failing three
   times the same way, or the model flip-flopping between two answers — each

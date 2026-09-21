@@ -1,5 +1,12 @@
 # Handoff log
 
+## 2026-09-21 - codex - compact white-and-purple side-panel home (0.10.44 candidate)
+
+**Did:** Built Dylan's requested side-panel redesign on isolated branch `codex/sidepanel-home-redesign` from clean integration `7df72e1`. Home now has Enable/Enabled browser access, model selection, Auto Continue and cost visibility; metrics show only questions and optional cost. Removed the idle `No parts planned` display and visible step tile. Moved Copy log and model-thinking visibility to Settings, tightened spacing, and strengthened the existing white-and-purple brand treatment. Updated user-facing README language and kept backend/manifest versions matched at candidate 0.10.44.
+**Verified:** `node --check extension/sidepanel.js`; sidepanel ID integrity script; `git diff --check`; `python -m pytest tests/test_sidepanel_ui.py tests/test_planner_executor.py::test_copy_log_contains_model_reply_and_validation_details tests/test_planner_discovery_contract.py::test_extension_requires_matching_discovery_backend -q` (3 passed). Headless Chromium screenshots at 390x900 for Home and Settings show no horizontal overflow (`scrollWidth=390`), and visual inspection confirms the requested hierarchy and Copy log placement.
+**Left undone:** No merge, push, backend deployment, extension reload or live assignment run. The active worksheet identity change owns 0.10.43 and is being implemented separately; rebase or cherry-pick this 0.10.44 candidate onto that finished integration before release.
+**Watch out:** Internal diagnostic copies still include step count even though Home no longer displays it. The visible `eth` DOM ID and stored `armed` key remain for compatibility; only the user-facing name changed to Enable. The Figma connector was not exposed to this running session, so the redesign was implemented and browser-rendered directly.
+
 ## 2026-09-21 - claude (integrator) - 0.10.41 and 0.10.42 merged and deployed
 
 **Did:** Merged claude/question-formats twice into codex/optional-numbering: a8c1b30 (0.10.41, screen readback for markerless choice groups) and 5ab6e29 (0.10.42, multi-part retry keeps every tab). Both deployed backend-first from a refreshed deploy-source (diff clean, local capabilities check), live `/api/capabilities?protocol=4` reports 0.10.42, health ok. Dylan reloads the extension himself.
