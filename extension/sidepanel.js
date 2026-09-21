@@ -9,6 +9,7 @@ const ALL_SITES = ['<all_urls>'];
 let armed = false;
 let running = false;
 let runPage = '';
+let latestSteps = 0;
 let tabInfo = null;   // kept fresh so a permission request stays inside the user gesture
 
 function paintEth() {
@@ -16,9 +17,10 @@ function paintEth() {
   button.classList.toggle('on', armed);
   button.classList.toggle('off', !armed);
   button.setAttribute('aria-pressed', String(armed));
+  button.textContent = armed ? 'Enabled' : 'Enable';
   button.title = armed
-    ? 'Armed: the agent may read and act on pages. Click to turn it off.'
-    : 'Off: the agent cannot touch any page. Click to arm it and grant access.';
+    ? 'Browser access is enabled. Click to disable it.'
+    : 'Browser access is off. Click to enable it.';
   $('start').disabled = !armed || running;
   $('stop').disabled = !running;
 }
@@ -148,8 +150,8 @@ $('copylog').onclick = async () => {
     for(const key of ['request_id','model','requested_model','provider','reasoning_tokens','finish_reason','response_kind','output_format','format_corrections','phase','question_key','slot_key','task_id','adapter','requested_value','actual','failure_code','document_id','observation_id','action_executed','entry_verified','save_state','grade_state','duration'])if(e[key]!=null)bits.push('  '+key+': '+JSON.stringify(e[key]));
     return bits.join('\n');
   });
-  const header = `Assignment Lab 2.0 log — ${new Date().toLocaleString()}\n`
-    + `${$('questions').textContent} questions, ${$('steps').textContent} steps, ${$('cost').textContent}\n`
+  const header = `Assignment Lab 2.0 log - ${new Date().toLocaleString()}\n`
+    + `${$('questions').textContent} questions, ${latestSteps} steps, ${$('cost').textContent}\n`
     + `model: ${[...new Set(entries.map(e => e.model).filter(Boolean))].join(', ') || '(no model call in this log)'}\n`
     + `page: ${runPage || $('page').textContent}\n${'-'.repeat(60)}`;
   try {
@@ -162,11 +164,13 @@ $('copylog').onclick = async () => {
 
 function paintState(state) {
   running = state.running;
-  if(state.runUrl)runPage=state.runUrl+' — '+(state.runTitle||'');
+  if(state.runUrl)runPage=state.runUrl+' | '+(state.runTitle||'');
   $('questions').textContent = state.questions || 0;
-  $('steps').textContent = state.steps;
+  latestSteps = state.steps || 0;
   $('cost').textContent = '$' + (state.cost || 0).toFixed(4);
-  $('progress').textContent = state.progress || 'No parts planned yet.';
+  const hasProgress = Boolean(state.progress && !/no parts planned/i.test(state.progress));
+  $('progress-card').hidden = !hasProgress;
+  $('progress').textContent = hasProgress ? state.progress : '';
   document.body.classList.toggle('running', running);
   const parts = (state.progress || '').match(/(\d+) of (\d+) parts/);
   $('part-meter').max = parts ? Math.max(1, Number(parts[2])) : 1;
@@ -174,7 +178,7 @@ function paintState(state) {
   if (running) {
     if (!$('status-pill').dataset.tone) $('status-pill').textContent = 'Working';
     $('task-title').textContent = 'Working through your assignment';
-    if ($('task-description').querySelector('br')) $('task-description').textContent = 'Reading, answering, and checking each part.';
+    $('task-description').textContent = 'Reading, answering, and checking each part.';
   }
   else if ($('status-pill').textContent === 'Working') $('status-pill').textContent = 'Stopped';
   paintEth();
@@ -193,7 +197,7 @@ async function refreshPage() {
     tabInfo = null;
     return null;
   }
-  $('page').textContent = new URL(tab.url).host + ' — ' + (tab.title || '').slice(0, 60);
+  $('page').textContent = new URL(tab.url).host + ' | ' + (tab.title || '').slice(0, 60);
   tabInfo = tab;
   return tab;
 }
@@ -220,7 +224,7 @@ $('eth').onclick = async () => {
     return;
   }
 
-  // Turning ETH off is a stop, not a colour change. A run in progress goes
+  // Disabling access is a stop, not a colour change. A run in progress goes
   // through the same abort-and-cancel path as the Stop button, and the site
   // access granted on arming is handed back so red means what it says.
   armed = false;
@@ -235,7 +239,7 @@ $('eth').onclick = async () => {
     // Chrome refuses to remove a permission that was never granted; that is fine.
   }
   paintEth();
-  banner(running ? 'Stopping.' : 'Off. The agent cannot read or act on any page until ETH is armed again.');
+  banner(running ? 'Stopping.' : 'Browser access is off. Enable it before starting another run.');
 };
 
 async function accessGranted(origin) {
@@ -339,7 +343,7 @@ chrome.runtime.onMessage.addListener((message) => {
   await refreshPage();
   const held = await accessGranted('<all_urls>');
   if (armed && !held) {
-    $('page').textContent += '  ·  access withheld';
+    $('page').textContent += ' | access withheld';
   }
 
   const status = await chrome.runtime.sendMessage({ type: 'status' });
@@ -388,21 +392,14 @@ for (const id of ['show-log', 'show-cost']) $(id).onchange = () => {
   displayPreferences();
   chrome.storage.local.set({[id]: $(id).checked});
 };
-function paintSummaries() {
-  $('continue-summary').textContent = 'Auto-continue ' + ($('advance').checked ? 'on' : 'off');
-  $('submit-summary').textContent = 'Submission ' + ($('auto_submit').checked ? 'on' : 'off');
-}
-for (const id of ['advance', 'auto_submit']) $(id).addEventListener('change', paintSummaries);
 chrome.storage.local.get(['show-log', 'show-cost', 'advance', 'auto_submit']).then(stored => {
   $('show-log').checked = stored['show-log'] !== false;
   $('show-cost').checked = stored['show-cost'] !== false;
-  $('continue-summary').textContent = 'Auto-continue ' + (stored.advance ? 'on' : 'off');
-  $('submit-summary').textContent = 'Submission ' + (stored.auto_submit ? 'on' : 'off');
   displayPreferences();
 });
 
 $('resume-run').onclick = async () => {
-  if(!armed || !tabInfo) {banner('Arm ETH and select the original assignment tab to resume.',true);return;}
+  if(!armed || !tabInfo) {banner('Enable browser access and select the original assignment tab to resume.',true);return;}
   const result=await chrome.runtime.sendMessage({type:'resume',tabId:tabInfo.id});
   if(!result?.ok)banner(result?.error||'Could not resume.',true);else showSettings(false);
 };
