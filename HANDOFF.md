@@ -1,5 +1,15 @@
 # Handoff log
 
+## 2026-09-21 - claude (integrator) - 0.10.43 + Codex side panel merged and deployed as 0.10.44
+
+**Did:** Fast-forwarded codex/optional-numbering to claude/question-formats 165a716 (0.10.43, worksheet-tab identity), then merged codex/sidepanel-home-redesign 366f589 (Codex's compact side panel) as 0b335b1; conflicts were only the two version lines (kept 0.10.44) and the two HANDOFF entries (both kept). Integrator review of the UI diff: JS changes are wording, a `latestSteps` variable for the Copy log header, and hiding the progress card when idle; every `$('id')` the script uses exists in the new HTML; `node --check` clean. Deployed backend-first from a refreshed deploy-source (only app.py differed; frontend identical; local capabilities 0.10.44); live `/api/capabilities?protocol=4` reported 0.10.44 on the first poll, `/api/health` ok.
+
+**Verified:** Merged tree: test_sidepanel_ui + copy-log + discovery-contract + worksheet_tabs (11) + parts (9) = 23 passed. 0.10.43 alone: full suite 450 passed + one TargetClosedError crash that passed alone. Not verified: the installed extension (Dylan reloads it), the live Q12 rerun, the new panel on a real run.
+
+**Left undone:** Live Q12 rerun on 0.10.44. Formative bundle (held). Codex's own Watch out stands: internal diagnostics still count steps although Home no longer shows them.
+
+**Watch out:** New base for every branch: 0b335b1. If the Copy log header of the next run says 0.10.43 or older, the extension was not reloaded.
+
 ## 2026-09-21 - codex - compact white-and-purple side-panel home (0.10.44 candidate)
 
 **Did:** Built Dylan's requested side-panel redesign on isolated branch `codex/sidepanel-home-redesign` from clean integration `7df72e1`. Home now has Enable/Enabled browser access, model selection, Auto Continue and cost visibility; metrics show only questions and optional cost. Removed the idle `No parts planned` display and visible step tile. Moved Copy log and model-thinking visibility to Settings, tightened spacing, and strengthened the existing white-and-purple brand treatment. Updated user-facing README language and kept backend/manifest versions matched at candidate 0.10.44.
