@@ -1,5 +1,15 @@
 # Handoff log
 
+## 2026-09-21 - claude (integrator) - 0.10.41 and 0.10.42 merged and deployed
+
+**Did:** Merged claude/question-formats twice into codex/optional-numbering: a8c1b30 (0.10.41, screen readback for markerless choice groups) and 5ab6e29 (0.10.42, multi-part retry keeps every tab). Both deployed backend-first from a refreshed deploy-source (diff clean, local capabilities check), live `/api/capabilities?protocol=4` reports 0.10.42, health ok. Dylan reloads the extension himself.
+
+**Verified:** Full suites on the branches: 438 passed + one TargetClosedError crash that passes alone (0.10.41); 440 passed clean (0.10.42). Live: Khan single-choice completed and verified on 0.10.40 (5:02 PM, answer E) before ending "incomplete" over the Previous/Next chrome group; Quizlet single-choice completed live per Dylan; M3-9 completed on 0.10.37.
+
+**Left undone:** Live Quizlet multi-select on 0.10.41+ (first real screen-readback run); live M4-14 on 0.10.42. Formative bundle (role before `e.type`; candidates must not be cut out of the stem; fingerprint too sensitive to post-answer redraw -> false TARGET_STALE; trailing-empty slot keys; one-label aliases; duplicated option text; chrome labels). Khan/Formative "unresolved leftovers" ending. MathPapa graph candidates by drag-handle signals. Check/submit-after-answer policy (parked by Dylan). Site allow-list for packaging.
+
+**Watch out:** New base for every branch: 5ab6e29. The other Claude session (assignment-agent-04) has not acknowledged the 0.10.41 design/diff messages; its aria-live/aria-pressed patch remains uncommitted on claude/site-compat.
+
 ## 2026-09-20 - claude - a retry re-asks the same multi-part question, not the tab on screen (0.10.42)
 
 **Did:** M4-14 (Ch.4 Q3, 1:31 PM on 0.10.38): the first plan call returned all thinking (15,900 of 15,900 tokens, provider AtlasCloud); the harness retried without that provider -- correct -- but `paid()` retried with `fresh = await this.observe()`, which sees only the tab on screen, so "Required 2 -- Net Income" fell out of the request (28 slots -> 27, `Required 2 … slots: 0`); the model planned the 27 it was shown (correct accounting, NI 7,850) and `validate(plan, obs)` refused it against the original 28-slot union: `Plan does not cover every answerable slot`. Same lines at 0.10.35 and 0.10.37 -- a latent bug in every retry path on a multi-part question (all-thinking, thinking-off, format correction, inspection-target correction). Built (Dylan: "make the McGraw Hill update you recommended earlier"): `paid()` keeps the fresh observe only as the staleness check; when `obs` is a multi-part union it retries with `{...obs, observation_id: new}` (`again`), else with `fresh`; all four retry sites and the inspection-correction `offered_slots` use `again`.
