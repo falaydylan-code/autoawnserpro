@@ -1,0 +1,23 @@
+<!doctype html><meta charset="utf-8"><title>Question frame</title>
+<style>body{font:16px sans-serif;margin:12px}input{width:120px;padding:6px}output{display:block;margin-top:8px;color:#060}</style>
+<!-- The question frame of transitions.html. ?q=N picks the question; &graded=1 shows the grade; &stem=revised rewrites
+     the question wording; &slow=1 renders the answer field 800 ms after load; &stray=1 reloads the document as soon
+     as a value is typed. Entered values are kept in the SHELL (parent.answers) so they survive a reload, as they do
+     on the real site. The shell records every load in parent.loads. -->
+<main>
+  <h2 id="stem"></h2>
+  <div id="body"></div>
+  <output id="feedback" role="status"></output>
+</main>
+<script>
+const p=new URLSearchParams(location.search);let n=Number(p.get('q')||1);
+parent.loads.push(location.search);
+function render(){body.innerHTML='<label>Amount <input id="amount" type="text"></label>';amount.value=parent.answers[n]||'';
+  amount.addEventListener('input',()=>{parent.answers[n]=amount.value;if(p.get('stray'))location.reload()});}
+function show(q){n=q;stem.textContent=`Question ${n}: enter the amount for item ${n}`+(p.get('stem')==='revised'?' (revised)':'');feedback.textContent='';render()}
+function grade(){feedback.textContent='Correct'}
+window.show=show;window.grade=grade;
+stem.textContent=`Question ${n}: enter the amount for item ${n}`+(p.get('stem')==='revised'?' (revised)':'');
+if(p.get('slow'))setTimeout(render,800);else render();
+if(p.get('graded'))grade();
+</script>

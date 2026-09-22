@@ -1,0 +1,45 @@
+<!doctype html><meta charset="utf-8"><title>Assignment shell whose question frame reloads on Check and Next</title>
+<style>body{font:16px sans-serif;margin:20px}main{max-width:900px}iframe{display:block;width:860px;height:220px;border:1px solid #888;margin:12px 0}button{padding:8px 16px;margin-right:12px}#verdict{display:block;min-height:1.2em}</style>
+<!-- McGraw Connect as it stopped the run (Ch.1 Q1, 2026-09-21 8:39 PM, 0.10.44): the question lives in an iframe,
+     the "Check my work" and "Next" buttons in the shell. Pressing Check RELOADS the question frame to show the grade
+     (the answers survive, the frame is a new document); pressing Next loads the next question into the same frame.
+     The harness's first look after its own Check click died "Document was replaced." ?params (shell):
+       check=reload  (default) Check reloads the frame with the grade shown; answers kept, still editable
+       check=redraw  Check writes the grade into the existing document (no reload -- the old happy path)
+       check=top     Check writes the grade into the SHELL's status, the frame is untouched
+       check=stem    Check reloads the frame with the grade AND a rewritten question stem (a different question)
+       check=none    Check does nothing
+       delay=<ms>    the reload after Check starts that long after the click
+       slow=1        the reloaded frame shows its answer field only 800 ms after it loads (half-loaded meanwhile)
+       next=reload   (default) Next loads question n+1 into the frame (new document, new question)
+       next=swap     Next rewrites the frame's content in place (same document, new question)
+       next=same     Next reloads the frame with the SAME question (new document, same question)
+       next=none     Next does nothing
+       stray=1       the frame reloads itself the moment a value is typed (a change the harness did not cause)
+     Question 3 is the last: its Next is disabled. -->
+<main>
+  <div id="position" aria-current="step">Question 1 of 3</div>
+  <h1>Chapter 1 homework</h1>
+  <p>Enter the amount asked for in the worksheet below. Check your work when you are done, then move on to the next question.</p>
+  <iframe id="frame"></iframe>
+  <output id="verdict" role="status"></output>
+  <button id="check">Check my work</button>
+  <button id="next">Next</button>
+</main>
+<script>
+const params=new URLSearchParams(location.search),mode={check:params.get('check')||'reload',next:params.get('next')||'reload'};
+window.answers={};window.clicks=[];window.loads=[];let n=1;
+frame.src='transitions_q.html?q=1'+(params.get('stray')?'&stray=1':'');   // stray applies from the first document; slow only to reloads
+const extra=()=>(params.get('slow')?'&slow=1':'')+(params.get('stray')?'&stray=1':'');
+const load=(q,graded,stem)=>{frame.src=`transitions_q.html?q=${q}${graded?'&graded=1':''}${stem?'&stem=revised':''}${extra()}`};
+check.onclick=()=>{clicks.push('check');
+  if(mode.check==='reload')setTimeout(()=>load(n,true),Number(params.get('delay')||0));
+  else if(mode.check==='redraw')frame.contentWindow.grade();
+  else if(mode.check==='top')verdict.textContent='Correct';
+  else if(mode.check==='stem')load(n,true,true);};
+next.onclick=()=>{clicks.push('next');verdict.textContent='';
+  if(mode.next==='reload'){n++;position.textContent=`Question ${n} of 3`;load(n)}
+  else if(mode.next==='swap'){n++;position.textContent=`Question ${n} of 3`;frame.contentWindow.show(n)}
+  else if(mode.next==='same')load(n);
+  if(n>=3)next.disabled=true;};
+</script>
