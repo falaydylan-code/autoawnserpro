@@ -345,9 +345,12 @@
     // one click on tab 2 and the harness took the same question for a new one (Q12, 12:38 PM). When the page says
     // nothing, the WIDGET is inferred, conservatively: the one tab group's nearest ancestor that holds a real answer
     // control (never a tab or a button) and is not the question root itself; and only if an anchor survives outside
-    // it -- a question position read outside the widget AND at least 40 characters of question text -- so two
-    // questions that share a URL cannot fold into one key. The exclusion touches identity only; the model still
-    // reads the visible tab's text and controls. Declared panels are never widened.
+    // it -- at least 40 characters of question text -- so two questions that share a URL cannot fold into one key.
+    // A question-position element (aria-current, .question-number) joins the key when the page has one outside the
+    // widget, but it is not required: McGraw's frame has none, and requiring it refused the same Q12 again
+    // (8:14 PM, TARGET_MISSING "no question position outside the tab widget"); the outside text plus the tab
+    // signature is the anchor. The exclusion touches identity only; the model still reads the visible tab's text
+    // and controls. Declared panels are never widened.
     const positionSelector='[aria-current=step],[aria-current=page],.question-number';
     let widget=null,widgetReason='';
     if(parts.length&&!panels.length){
@@ -356,13 +359,16 @@
       if(strips.size!==1)widgetReason='more than one tab group';
       else{let n=[...strips][0];while(n&&n!==root&&!elements.some(e=>answerControl(e)&&n.contains(e)))n=n.parentElement;
         if(!n||n===root||!root.contains(n))widgetReason='no box below the question root holds both the tabs and an answer control';
-        else{const pos=norm([...document.querySelectorAll(positionSelector)].find(e=>!n.contains(e))?.textContent),outside=renderedText(root,new Set([...excluded,n])).text;
-          if(!pos)widgetReason='no question position outside the tab widget';else if(outside.length<40)widgetReason='fewer than 40 characters of question text outside the tab widget';else widget=n;}}
+        else{const outside=renderedText(root,new Set([...excluded,n])).text;
+          if(outside.length<40)widgetReason='fewer than 40 characters of question text outside the tab widget';else widget=n;}}
     }
     const identityExcluded=new Set([...excluded,...panels,...(widget?[widget]:[])]);
     const stem=renderedText(root,excluded),identityStem=parts.length?renderedText(root,identityExcluded):stem;
     const position=norm((widget?[...document.querySelectorAll(positionSelector)].find(e=>!widget.contains(e)):document.querySelector(positionSelector))?.textContent);
-    const tabSignature=widget?parts.length+':'+parts.map(p=>name(p.tab)||norm(p.tab.value)||'').join('/'):'';
+    // The signature is the tabs a student SEES (value or text), not their accessible names: sites write progress
+    // into aria-label ("Transaction Number 2 not yet entered ..." on McGraw) and that must not fork the key after
+    // an entry is recorded. The model-facing part label above keeps the full name.
+    const tabSignature=widget?parts.length+':'+parts.map(p=>norm(p.tab.value)||norm(p.tab.innerText)||name(p.tab)).join('/'):'';
     const platform=root.getAttribute('data-question-id')||'';
     const positionMatch=norm(document.body.innerText).match(/\bQuestion\s+(\d+)\s+(?:of|\/)\s*(\d+)\b/i);
     const enumeration=positionMatch?{index:Number(positionMatch[1]),total:Number(positionMatch[2])}:null;

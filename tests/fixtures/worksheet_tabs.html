@@ -6,8 +6,11 @@
      tab click with the SAME cell ids. Values entered on one tab survive a round trip, as they do live. ?params:
        delay=<ms>  the description + table appear that long after the click (the box is empty meanwhile)
        wrapper=1   the tabs are direct children of the box, beside the table (no tab strip element)
-       noposition=1 / shorttext=1 / inpos=1   no anchor: no position, under 40 chars of outside text, or the
-                    position sits inside the box -- the harness must NOT infer the widget on these
+       noposition=1 no question-position element anywhere (the live McGraw frame, 8:14 PM) -- inferred anyway
+       inpos=1     the position sits inside the box -- inferred, the position leaves the key
+       shorttext=1 under 40 chars of question text outside the box -- the harness must NOT infer the widget
+       status=1    McGraw's tab labels: aria-label "Transaction Number N not yet entered <text>", flipped to
+                    "... entered ..." on the selected tab as soon as a value is entered (must not move the key)
        twostrips=1 a second, unrelated tab group in the question (View: Table | Chart)
        docswap=1   clicking a tab navigates the document (identity of the document, not the question, changes)
        latetext=1  the table arrives at once, the description 400 ms later; the box says aria-busy until then -->
@@ -31,7 +34,7 @@ window.tabClicks=[];window.rebuilds=0;window.values=[{},{},{}];let selected=0;
 function render(i,text){
   document.getElementById('body').innerHTML=`<div id="description">${text??TX[i]}</div><p>Note: Enter debits before credits.</p>
     <table id="0_table0"><tr><th>Transaction</th><th>General Journal</th><th>Debit</th></tr><tr><td>${'abc'[i]}</td>${ROWS.map(([id,label])=>`<td><input id="${id}" aria-label="${label}"></td>`).join('')}</tr></table>`;
-  for(const [id] of ROWS){const e=document.getElementById(id);e.value=window.values[i][id]||'';e.oninput=()=>{window.values[i][id]=e.value}}
+  for(const [id] of ROWS){const e=document.getElementById(id);e.value=window.values[i][id]||'';e.oninput=()=>{window.values[i][id]=e.value;if(params.get('status'))document.querySelectorAll('#worksheet [role=tab], main > [role=tab]')[i].setAttribute('aria-label',`Transaction Number ${i+1} entered ${TX[i]}`)}}
   window.rebuilds++;
 }
 function show(i){
@@ -48,6 +51,6 @@ if(params.get('noposition'))document.getElementById('position').remove();
 if(params.get('shorttext')){document.getElementById('required').remove();document.getElementById('title').remove()}
 if(params.get('inpos'))document.getElementById('worksheet').prepend(document.getElementById('position'));
 if(params.get('twostrips'))document.querySelector('main').insertAdjacentHTML('afterbegin','<div role="tablist"><button type="button" role="tab" aria-selected="true">Table</button><button type="button" role="tab" aria-selected="false">Chart</button></div>');
-for(const [i,t] of [...document.querySelectorAll('#worksheet [role=tab], main > [role=tab]')].entries())t.onclick=()=>show(i);
+for(const [i,t] of [...document.querySelectorAll('#worksheet [role=tab], main > [role=tab]')].entries()){t.onclick=()=>show(i);if(params.get('status'))t.setAttribute('aria-label',`Transaction Number ${i+1} not yet entered ${TX[i]}`)}
 render(0);
 </script>

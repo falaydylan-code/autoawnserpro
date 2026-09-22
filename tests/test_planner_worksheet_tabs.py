@@ -6,8 +6,13 @@ looked once, and the question key had moved -- the transaction text tab 2 replac
 so TARGET_STALE ended the run before any model call. Three things change here, all general:
   * planner_content.js infers the tab WIDGET when the page declares nothing: the single tab group's nearest box
     that holds a real answer control (never a tab or a button), below the question root, and only when an anchor
-    survives outside it (a question position outside the box AND 40+ characters of question text). Its contents
-    leave the identity, as declared panels do; the tab count and labels join it. Model text is untouched.
+    survives outside it: 40+ characters of question text. Its contents leave the identity, as declared panels do;
+    the tab count and VISIBLE labels join it. Model text is untouched.
+    0.10.45: the anchor no longer requires a question-position element. The live McGraw frame has none
+    (8:14 PM, 0.10.44: TARGET_MISSING "no question position outside the tab widget" on the same tab click), so
+    0.10.43 never engaged on the page it was built for. The position still joins the key when a page has one.
+    The tab signature reads the tab's value/text rather than its accessible name, because McGraw writes progress
+    into aria-label ("Transaction Number 2 not yet entered ...") and an entry would otherwise move the key.
   * planner_runtime.js showPart settles on the requested part's OWN controls in its OWN frame (two agreeing
     polls of slots, key and the part's content; busy resets), asserts identity once on the settled view, and
     checks identity on the pre-click view. The aggregate key is hashed over frames with slots OR a tab strip,
@@ -121,19 +126,51 @@ def test_a_document_replaced_by_the_tab_click_is_named(extension):
     assert 'Document was replaced' in stop['detail']                                                        # the frame guard or showPart, whichever looks first
 
 
-def test_without_an_anchor_nothing_is_inferred_and_the_switch_stops_honestly(extension):
-    for variant, reason in [('noposition=1', 'no question position outside the tab widget'), ('shorttext=1', 'fewer than 40 characters'), ('inpos=1', 'no question position outside the tab widget')]:
+def test_without_question_text_outside_the_box_nothing_is_inferred_and_the_switch_stops_honestly(extension):
+    page, w, tid = navigate(extension, 'worksheet_tabs.html?shorttext=1')
+    first = observe(w, tid)
+    assert first['identity']['inferred_widget'] is False and 'fewer than 40 characters' in first['identity']['no_inference']
+    assert all(s['part_scope'] == 'fallback' for s in first['slots'])
+    result = run(w, tid)
+    assert result['status'] == 'needs_review'
+    stop = next(e for e in result['events'] if e['failure_code'] == 'TARGET_MISSING')
+    assert 'showed no answer controls the harness can tie to it' in stop['detail'] and 'fewer than 40 characters' in stop['detail'], stop['detail']
+    assert not any(e['detail'].startswith('Revealed part') for e in result['events'])                         # nothing recorded for the part
+    assert [e['purpose'] for e in result['events'] if e['purpose']] == ['show_part']                         # one tab click, no answer input
+    assert page.evaluate('window.values') == [{}, {}, {}]
+
+
+def test_a_page_without_a_position_marker_is_still_anchored_by_its_question_text(extension):
+    """The live McGraw frame: no aria-current, no .question-number, tabs 1 2 3 with no panels (8:14 PM log)."""
+    for variant in ['noposition=1', 'inpos=1']:
         page, w, tid = navigate(extension, 'worksheet_tabs.html?' + variant)
         first = observe(w, tid)
-        assert first['identity']['inferred_widget'] is False and reason in first['identity']['no_inference'], variant
-        assert all(s['part_scope'] == 'fallback' for s in first['slots'])
+        assert first['identity']['inferred_widget'] is True and first['identity']['position'] == '' and 'no_inference' not in first['identity'], variant
+        assert first['identity']['tabs'] == '3:1/2/3' and all(s['part_scope'] == 'inferred' for s in first['slots']), variant
+        tab(page, 2)
+        assert observe(w, tid)['question_key'] == first['question_key'], variant
+        tab(page, 1)
         result = run(w, tid)
-        assert result['status'] == 'needs_review', variant
-        stop = next(e for e in result['events'] if e['failure_code'] == 'TARGET_MISSING')
-        assert 'showed no answer controls the harness can tie to it' in stop['detail'] and reason in stop['detail'], stop['detail']
-        assert not any(e['detail'].startswith('Revealed part') for e in result['events'])                     # nothing recorded for the part
-        assert [e['purpose'] for e in result['events'] if e['purpose']] == ['show_part']                     # one tab click, no answer input
-        assert page.evaluate('window.values') == [{}, {}, {}]
+        assert result['status'] == 'finished', (variant, result['events'][-3:])
+        assert result['bodies'][0]['parts'] == [2, 2, 2] and all(t in result['bodies'][0]['question'] for t in TX), variant
+        assert page.evaluate('window.values') == [{'0_table0_cell_c1_r0': '101', '0_table0_cell_c2_r0': '1190'}] * 3, variant
+
+
+def test_progress_written_into_the_tab_label_does_not_move_the_key(extension):
+    """McGraw's tabs are named "Transaction Number N not yet entered <text>"; the name flips once a value is in."""
+    page, w, tid = navigate(extension, 'worksheet_tabs.html?status=1&noposition=1')
+    first = observe(w, tid)
+    assert all(p['label'].startswith('Transaction Number %d not yet entered' % (i + 1)) and t in p['label'] for i, (p, t) in enumerate(zip(first['parts'], TX)))   # the model reads the full name
+    assert first['identity']['tabs'] == '3:1/2/3'                                                             # the key reads what the student sees
+    page.fill('[id="0_table0_cell_c1_r0"]', '101')
+    assert page.get_attribute('#worksheet [role=tab]', 'aria-label').startswith('Transaction Number 1 entered')
+    after = observe(w, tid)
+    assert after['question_key'] == first['question_key'] and after['identity']['tabs'] == first['identity']['tabs']
+    assert after['parts'][0]['label'].startswith('Transaction Number 1 entered')
+    page.fill('[id="0_table0_cell_c1_r0"]', '')
+    result = run(w, tid)                                                                                      # every entry flips a label mid-run
+    assert result['status'] == 'finished', result['events'][-3:]
+    assert page.evaluate('window.values') == [{'0_table0_cell_c1_r0': '101', '0_table0_cell_c2_r0': '1190'}] * 3
 
 
 def test_two_tab_groups_prevent_inference(extension):
