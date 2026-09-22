@@ -68,10 +68,33 @@
     }
   }
   class Engine {
-    constructor(bridge,tabId,config,saved=null){this.b=bridge;this.tabId=tabId;this.config=config;this.id=saved?.id||crypto.randomUUID();this.generation=crypto.randomUUID();this.abort=new AbortController();this.ledger=saved||{id:this.id,questions:{},cost:0,events:[],status:'ready'};this.current=null;this.busy=false;this.cancelled=false;this.steps=0;this.frameDocs=new Map()}
+    constructor(bridge,tabId,config,saved=null){this.b=bridge;this.tabId=tabId;this.config=config;this.id=saved?.id||crypto.randomUUID();this.generation=crypto.randomUUID();this.abort=new AbortController();this.ledger=saved||{id:this.id,questions:{},cost:0,events:[],status:'ready'};this.current=null;this.transition=null;this.busy=false;this.cancelled=false;this.steps=0;this.frameDocs=new Map()}
     stop(){this.cancelled=true;this.abort.abort();this.generation=crypto.randomUUID()}
     async guard(){if(this.cancelled||this.b.stopped())throw new Fault('CANCELLED','Stopped by user.');await this.b.bound(this.tabId);this.current?.recovery.check();
-      if(this.current?.frameDocuments)for(const f of this.current.frameDocuments){let identity;try{identity=await chrome.tabs.sendMessage(this.tabId,{type:'planner_inspect',operation:'identity'},{frameId:f.frame_id})}catch{throw new Fault('TARGET_STALE','Document was replaced.')}if(identity?.document_id!==f.document_id)throw new Fault('TARGET_STALE','Document was replaced.');}}
+      // The pinned frame documents are asserted before every look and every input -- except while the harness is
+      // waiting out a page change it caused itself (settle(): Check / Next / Submit). There a replaced document is
+      // the click doing its job, and the new page is judged by the question, not by the ids it happens to carry.
+      // When the pin does fail, the log names the frame and how it moved (Ch.1 Q1, 8:39 PM: a bare "Document was
+      // replaced." could not say which of two frames McGraw reloaded on Check).
+      if(this.current?.frameDocuments&&!this.transition)for(const f of this.current.frameDocuments){let identity;try{identity=await chrome.tabs.sendMessage(this.tabId,{type:'planner_inspect',operation:'identity'},{frameId:f.frame_id})}catch{throw new Fault('TARGET_STALE',`Document was replaced (frame ${f.frame_id} stopped responding).`,{frame_id:f.frame_id,reason:'unreachable',was:f.document_id})}
+        if(identity?.document_id!==f.document_id)throw new Fault('TARGET_STALE',`Document was replaced (frame ${f.frame_id} holds a new document).`,{frame_id:f.frame_id,reason:'replaced',was:f.document_id,now:identity?.document_id||null});}}
+    // A page change the harness caused on purpose. Only the clicks whose expected result IS a different page (Check,
+    // Next, Submit) and the first look after a finished answer may wait one out: the frame pins are lifted while
+    // polling, and the page counts as settled when `done` holds on two consecutive agreeing polls (key, document,
+    // slot count, feedback, page state) -- a frame caught between documents is neither settled nor fatal. The pins
+    // come back the moment the wait ends, whichever way it ends; every other document change stays fatal.
+    async settle(purpose,before,done){this.transition={purpose,since:Date.now()};
+      try{const until=Date.now()+LIMITS.navigation;let fresh=null,previous=null,unreadable=null;
+        do{await sleep(150);try{fresh=await this.observe()}catch(e){if(e.code!=='FRAME_UNREADABLE')throw e;unreadable=e;previous=null;continue}unreadable=null;
+          const signature=[fresh.question_key,fresh.document_id,fresh.slots.length,fresh.feedback,fresh.page_state].join('|');
+          if(done(fresh,before)&&signature===previous)return {obs:fresh,settled:true,replaced:fresh.document_id!==before.document_id};previous=signature;
+        }while(Date.now()<until);
+        if(unreadable)throw new Fault('FRAME_UNREADABLE',`The page did not become readable within ${LIMITS.navigation/1000} s after ${purpose}: ${unreadable.message}`);
+        return {obs:fresh,settled:false,replaced:!!fresh&&fresh.document_id!==before.document_id}}
+      finally{this.transition=null}}
+    // The same question on a replaced document (a page that redraws its frame on Check, or after a save): pin the
+    // documents it holds now, so the next input is guarded against the page that is actually there.
+    repin(obs){this.current.document=obs.document_id;this.current.identity=obs.identity;this.current.frameDocuments=obs.frames.map(f=>({frame_id:f.frame_id,document_id:f.document_id}))}
 
     async persist(){
       // Bound durable DOM history so diagnostics cannot exhaust extension storage.
@@ -970,7 +993,13 @@
       try{if(this.ledger.pending_request)throw new Fault('BUDGET_EXHAUSTED','Prior request cost is uncertain; reconcile before resuming.');let navigationStates=new Set();
         while(true){this.current=null;let obs=await this.observe();if(obs.page_state==='complete'){await this.event('FINISH','Page reports assignment complete.',{grade_state:obs.grade_state,save_state:obs.save_state});this.ledger.status='completed';break}
           if(obs.page_state!=='locked')await this.runQuestion(obs);else await this.event('FINISH','Attempt is graded and locked; answer entry is retired.',{grade_state:obs.grade_state,save_state:obs.save_state});
-          obs=await this.observe();this.config=await this.b.config();
+          // After a finished answer nothing more goes into the old page, so a document the page replaced on its own
+          // (a save redraw, an auto-advance) is information, not a stale target: look without the pins, then decide
+          // by the question -- same key on a new document -> re-pin and carry on; new key -> the page advanced.
+          if(this.current?.finished){const settled=await this.settle('after_answer',obs,fresh=>fresh.question_key===this.current.key||fresh.slots.length>0||fresh.page_state!=='answering');obs=settled.obs;
+            if(settled.replaced&&obs.question_key===this.current.key){this.repin(obs);await this.event('OBSERVE','The page replaced its document after the verified answer; the question is unchanged.')}}
+          else obs=await this.observe();
+          this.config=await this.b.config();
           if(this.current?.finished&&obs.question_key!==this.current.key){
             if(!this.config.advance){this.ledger.status='finished';break}
             await this.event('ADVANCE','The page advanced after the verified answer; observing the new question.');continue;
@@ -979,9 +1008,18 @@
             const checks=obs.navigation.filter(n=>n.kind==='check'&&!n.disabled),signature=hash(JSON.stringify(this.current.plan));this.current.checks||=[];
             if(checks.length===1&&!this.current.checks.includes(signature)){
               this.current.checks.push(signature);await this.persist();await this.event('VERIFY','Checking work once for this answer plan.');await this.click(checks[0].frame,checks[0].target,{purpose:'check_work',executor_reason:'Check work is authorized and this answer plan has not been checked yet.',navigation_label:checks[0].label});
-              const until=Date.now()+LIMITS.navigation;let feedback=false;do{await sleep(150);const fresh=await this.observe();if(fresh.feedback!==obs.feedback||fresh.page_state!==obs.page_state||fresh.question_key!==obs.question_key){obs=fresh;feedback=true;break}}while(Date.now()<until);
-              if(!feedback)throw new Fault('INPUT_NO_EFFECT','Check produced no new feedback. It will not be repeated.');
-              await this.event('VERIFY','Website feedback received',{grade_state:obs.grade_state,save_state:obs.save_state});
+              // A page answers a Check by redrawing, by reloading its question frame (McGraw, Ch.1 Q1 8:39 PM), or by
+              // moving on. All three are the click doing its job. The graded page is accepted only as the SAME question:
+              // a different key is named and stops the run rather than guessed at.
+              // Settled = the page responded (feedback, state, key or document moved) AND it is readable again (answer
+              // controls back, or locked/complete): a reloaded frame that shows its stem before its inputs is not the
+              // graded page yet. A frame the site re-created rather than reloaded then shows up as a key change (frames).
+              const settled=await this.settle('check_work',obs,(fresh,before)=>(fresh.feedback!==before.feedback||fresh.page_state!==before.page_state||fresh.question_key!==before.question_key||fresh.document_id!==before.document_id)&&(fresh.slots.length>0||fresh.page_state!=='answering'));
+              if(!settled.settled)throw new Fault('INPUT_NO_EFFECT',settled.replaced?`Check replaced the page's document but it did not settle within ${LIMITS.navigation/1000} s. It will not be repeated.`:'Check produced no new feedback. It will not be repeated.');
+              obs=settled.obs;
+              if(obs.question_key!==this.current.key)throw new Fault('TARGET_STALE',`Question identity changed after Check (${identityMovers(this.current.identity,obs.identity)}); the graded page was not entered.`,{identity:{was:this.current.identity||null,now:obs.identity||null},document_replaced:settled.replaced});
+              if(settled.replaced)this.repin(obs);
+              await this.event('VERIFY','Website feedback received',{grade_state:obs.grade_state,save_state:obs.save_state,...(settled.replaced?{document_replaced:true}:{})});
               if(obs.grade_state==='incorrect'&&obs.page_state!=='locked')throw new Fault('VALUE_MISMATCH','Website graded this attempt incorrect and permits editing. Review feedback before another attempt.');
             }
           }
@@ -994,14 +1032,22 @@
               if(this.current)obs=await this.reconcile()||await this.observe();const buttons=obs.navigation.filter(n=>n.kind==='submit'&&!n.disabled);if(buttons.length!==1)throw new Fault('TARGET_AMBIGUOUS','Submission target is not unique.');
               if(this.ledger.submission_sent)throw new Fault('REPEATED_STATE','Submission was already sent; review its result.');
               this.ledger.submission_sent=true;await this.persist();await this.event('FINISH','Submitting the enumerated, verified assignment.');await this.click(buttons[0].frame,buttons[0].target,{purpose:'submit_assignment',executor_reason:'Submission is enabled and assignment enumeration and verification gates passed.',navigation_label:buttons[0].label});
-              const until=Date.now()+LIMITS.navigation;let confirmed=false;do{await sleep(150);const p=await this.observe();if(p.page_state==='complete'){confirmed=true;await this.event('FINISH','Assignment submission confirmed by the page.',{save_state:p.save_state,grade_state:p.grade_state});break}}while(Date.now()<until);
-              if(!confirmed)throw new Fault('SAVE_TIMEOUT','Submission was sent but not confirmed. Do not repeat it without reviewing the page.');this.ledger.status='completed';break;
+              const settled=await this.settle('submit_assignment',obs,fresh=>fresh.page_state==='complete');
+              if(!settled.settled)throw new Fault('SAVE_TIMEOUT','Submission was sent but not confirmed. Do not repeat it without reviewing the page.');
+              await this.event('FINISH','Assignment submission confirmed by the page.',{save_state:settled.obs.save_state,grade_state:settled.obs.grade_state});this.ledger.status='completed';break;
             }
             if(next.length>1)throw new Fault('TARGET_AMBIGUOUS','More than one Next control.');this.ledger.status='finished';await this.event('FINISH','Observed question complete. No unique next-question control found.');break;
           }
           const signature=obs.question_key+':'+next[0].target;if(navigationStates.has(signature))throw new Fault('REPEATED_STATE','Navigation returned to the same question.');navigationStates.add(signature);
           await this.event('ADVANCE','Moving to the next question');await this.click(next[0].frame,next[0].target,{purpose:'advance',executor_reason:'Automatic continuation is enabled and the current attempt is complete or locked.',navigation_label:next[0].label});
-          const until=Date.now()+LIMITS.navigation;let changed=false;do{await sleep(150);const p=await this.observe();if(p.question_key!==obs.question_key||p.page_state==='complete'){changed=true;break}}while(Date.now()<until);if(!changed)throw new Fault('INPUT_NO_EFFECT','Next did not reach a different question.');
+          // Next may swap the question in place or reload the frame that holds it; either way the loop starts over on
+          // whatever question is there now (this.current is dropped at the top), so no pin needs restoring here.
+          // A different question counts once it is readable (has answer controls, or is locked/complete): a frame that
+          // has loaded its stem but not yet its inputs is not a question to plan on.
+          const settled=await this.settle('advance',obs,(fresh,before)=>fresh.page_state==='complete'||(fresh.question_key!==before.question_key&&(fresh.slots.length>0||fresh.page_state!=='answering')));
+          if(!settled.settled){if(settled.obs&&settled.obs.question_key!==obs.question_key)await this.event('ADVANCE',`Next reached a different page but no answer controls appeared within ${LIMITS.navigation/1000} s; reading it as it is.`);
+            else throw new Fault('INPUT_NO_EFFECT',settled.replaced?`Next replaced the page's document but no different question settled within ${LIMITS.navigation/1000} s.`:'Next did not reach a different question.');}
+          else if(settled.replaced)await this.event('ADVANCE','The page replaced its document while moving on; reading the new question.');
         }
       }catch(e){this.ledger.status=this.cancelled||this.b.stopped()?'cancelled':'needs_review';
         // A Fault's `actual` (e.g. what was actually hit, or which scroll container) was captured at the failure

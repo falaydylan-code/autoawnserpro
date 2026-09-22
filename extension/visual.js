@@ -89,8 +89,13 @@
   }
   // Adopt the current document as this gesture's, THEN guard. Guarding first
   // would compare the fresh page against the previous gesture's URL and reject
-  // the first move after any navigation.
-  async function begin(id, stopped) { await attach(id); gestureUrl = ''; const tab = await guard(id, stopped); gestureUrl = tab.url; cancelled = false; return tab; }
+  // the first move after any navigation. `cancelled` is likewise a verdict on
+  // the gesture that was in flight when the page moved, not on the next one:
+  // a navigation between gestures (a question frame reloaded by Check, then
+  // Next pressed) left it set, and the first gesture on the new page was
+  // refused as "Browser input cancelled." A new gesture starts clean; a
+  // navigation DURING it is still caught by every event's guard.
+  async function begin(id, stopped) { await attach(id); gestureUrl = ''; cancelled = false; const tab = await guard(id, stopped); gestureUrl = tab.url; return tab; }
 
   async function mouse(id, type, pt, extra, stopped) {
     await guard(id, stopped);
