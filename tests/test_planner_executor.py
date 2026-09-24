@@ -499,7 +499,7 @@ def test_start_ignores_old_workflow_preference_and_uses_planner(extension):
    await chrome.storage.local.set({armed:true,planner_enabled:false});
    let ran=0;const Original=AssignmentPlanner.Engine,originalFetch=fetch;
    AssignmentPlanner.Engine=class {constructor(){this.ledger={}}async run(){ran++}};
-   globalThis.fetch=async u=>String(u).includes('/api/capabilities')?new Response(JSON.stringify({protocol:4,features:['task_plans','stable_slots','typed_verification','bounded_repair','frame_scoped_inspection','interaction_classification','choice_discovery','bounded_format_correction']})):originalFetch(u);
+   globalThis.fetch=async u=>String(u).includes('/api/capabilities')?new Response(JSON.stringify({protocol:4,features:['task_plans','stable_slots','typed_verification','bounded_repair','frame_scoped_inspection','interaction_classification','choice_discovery','bounded_format_correction','contextual_navigation']})):originalFetch(u);
    try {await __assignmentHarness.startSelected(id);return {ran,legacy:typeof __assignmentHarness.run,errors:__assignmentHarness.state.log.filter(e=>e.kind==='error')}}
    finally{AssignmentPlanner.Engine=Original;globalThis.fetch=originalFetch}
  }""",tid)

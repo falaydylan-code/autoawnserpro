@@ -1,0 +1,44 @@
+<!doctype html><meta charset="utf-8"><title>Contextual workflow controls</title>
+<style>body{font:17px sans-serif;padding:30px}label{display:block;margin:14px}button,input[type=button]{padding:9px;margin:8px}footer{margin-top:60px}</style>
+<main data-question-id="workflow-1">
+  <h1>Which operations protect business records?</h1>
+  <fieldset><legend>Select all that apply</legend>
+    <label><input type="checkbox" id="a">Keep accurate records</label>
+    <label><input type="checkbox" id="b">Ignore records</label>
+    <label><input type="checkbox" id="c">Protect stored records</label>
+  </fieldset>
+  <div role="status" id="feedback"></div>
+</main>
+<footer id="actions"></footer>
+<script>
+const params=new URLSearchParams(location.search),mode=params.get('mode')||'confidence';
+window.clicks=[];window.q=1;window.navCalls=0;
+function next(){
+  clicks.push('next');q++;
+  document.querySelector('main').dataset.questionId='workflow-'+q;
+  feedback.textContent='';document.querySelectorAll('input[type=checkbox]').forEach(e=>{e.checked=false;e.disabled=false});
+  if(q===2){feedback.textContent='Assignment complete';actions.replaceChildren();}
+}
+function submit(label){
+  clicks.push(label);
+  if(mode==='noop')return;
+  if(mode==='auto'){next();return;}
+  feedback.textContent='Correct';
+  document.querySelectorAll('input[type=checkbox]').forEach(e=>e.disabled=true);
+  actions.innerHTML=mode==='unknown'?'<p>Continue to another question using this control.</p><button onclick="next()">Onward</button>':'<button onclick="next()">Next question</button>';
+}
+if(mode==='unknown'){
+  actions.innerHTML='<p>Use this control to evaluate your current answer.</p><button onclick="submit(this.textContent)">Evaluate response</button>';
+}else if(mode==='variant'){
+  actions.innerHTML='<p>Check your current answer.</p><input type="button" value="Verify answer" onclick="submit(this.value)">';
+}else if(mode==='ambiguous'){
+  feedback.textContent='Correct';document.querySelectorAll('input[type=checkbox]').forEach(e=>e.disabled=true);
+  actions.innerHTML='<p>Move to the next question.</p><button onclick="next()">Next</button><button onclick="next()">Next</button>';
+}else if(mode==='decoy'){
+  actions.innerHTML='<p>Display quality</p><button onclick="clicks.push(this.textContent)">High</button><button onclick="clicks.push(this.textContent)">Low</button>';
+}else if(mode==='final'){
+  actions.innerHTML='<p>Hand in your entire assignment.</p><button onclick="clicks.push(\'final\')">Submit assignment</button>';
+}else{
+  actions.innerHTML='<p>Rate your confidence to submit your answer.</p>'+['High','Medium','Low'].map(x=>'<button onclick="submit(this.textContent)">'+x+'</button>').join('');
+}
+</script>

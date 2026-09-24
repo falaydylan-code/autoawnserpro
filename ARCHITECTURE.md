@@ -97,6 +97,35 @@ per-run step ceiling is gone.
 5. **Verify** — independently re-read the planned target value or containment
    using the frame map. Update the part ledger; only then consider navigation.
 
+After answer entry is verified, workflow controls are handled by a separate
+bounded navigation phase. `planner_content.js` returns visible controls with
+their label, local action-area context, group, disabled state and a closed kind
+(`check`, `answer_submit`, `advance`, `submit`, or `unknown`). It keeps confidence
+ratings out of answer choices and marks them as current-answer submission
+controls only when the surrounding text explicitly connects confidence to
+submitting the answer. Unfamiliar controls are retained as candidates instead
+of being silently discarded, but final-assignment submission is never inferred
+from an unknown label.
+
+`planner_runtime.js` uses deterministic matching when one enabled candidate has
+an unambiguous kind. Otherwise it may make at most two metered navigation calls
+for the question: one to interpret answer checking/submission and one to find
+the next-question control. The navigation request contains candidates and
+permissions only; it does not include a new screenshot, feedback, or answer
+key. The selected candidate, action, permissions, question/document identity,
+and current DOM fingerprint are all rechecked immediately before input. A
+confidence rating is therefore never treated as academic confidence supplied by
+the entry verifier, and a final hand-in control remains behind the existing
+enumeration and submission gates.
+
+The worker records an answer-submission attempt as pending before clicking. It
+clears that record only after a settled page confirms feedback, a safe new
+unanswered question, or completion. A resume with a pending record stops rather
+than repeating the click, even if the site redrew the question and changed its
+DOM-derived key. Check, answer submission, advance and final submission each
+have their own transition predicates; a changed page that cannot establish the
+expected outcome is reported for review.
+
 The screenshot is the source of truth for reading. The element index exists only
 so the model has something to name when acting.
 

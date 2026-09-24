@@ -25,7 +25,37 @@
   const sensitive=/credit.?card|card.?number|cvv|cvc|social.?security|ssn|iban|routing|account.?number/i;
   const forbidden=/^(?:delete|remove|discard|reset|sign\s*(?:in|out)|log\s*(?:in|out)|register|accept|agree|allow|consent|download|export|purchase|buy|pay|checkout)\b/i;
   // One vocabulary owns both navigation discovery and exclusion from answers.
-  const navigationKind=label=>forbidden.test(label)?'':/^(next(?: question| part)?|continue)$/i.test(label)?'advance':/^(try it!?|check(?: my work| answer)?|submit answer)$/i.test(label)?'check':/^(submit(?: assignment| all answers)?|finish(?: assignment)?|hand in|turn in)$/i.test(label)?'submit':'';
+  const navigationKind=label=>{const t=norm(label).replace(/[.!?›»→]+$/g,'').trim();
+    if(forbidden.test(t))return '';
+    if(/^(?:submit(?: (?:the |my )?(?:assignment|quiz|test|assessment|all answers))?|finish(?: (?:the |my )?(?:assignment|quiz|test|assessment))?|hand in|turn in)$/i.test(t))return 'submit';
+    if(/^(?:submit|send|record)(?: (?:my|this|the|current))? (?:answer|response)$/i.test(t))return 'answer_submit';
+    if(/^(?:try it|check(?: (?:my |the |this )?(?:work|answer|answers|response))?|verify (?:my |the |this )?(?:answer|answers|response)|grade (?:my |the |this )?(?:answer|response))$/i.test(t))return 'check';
+    return /^(?:next(?: (?:question|part|problem|item))?|continue(?: to (?:the )?next(?: question|problem)?)?|proceed to (?:the )?next(?: question|problem)?)$/i.test(t)?'advance':'';};
+  // Only local action-area text, not answer/feedback contents, accompanies a navigation candidate.
+  function navigationInfo(e){
+    const label=norm(name(e)||e.value||e.querySelector('title')?.textContent||'').slice(0,300);
+    if(!label||forbidden.test(label)||/^(?:previous|back|cancel|clear|reset|skip|hint|help|reading|read about|review|listen|play|audio|share|report|flag|settings|close)\b/i.test(label))return null;
+    if(e.closest('[role=tablist],[role=menu],header,[role=banner]')||e.matches('[role=tab],[role=radio],[role=checkbox],[aria-pressed]'))return null;
+    let context='',group=e.parentElement;
+    for(let p=e.parentElement,depth=0;p&&depth<3;p=p.parentElement,depth++){
+      if(p===document.body||p.matches('main,[role=main],[data-question-id]'))break;
+      const excluded=new Set(all(p,'input,textarea,select,label,[role=radio],[role=checkbox],td,th,[role=gridcell],.correct-answer'));
+      const text=renderedText(p,excluded).text;
+      if(text.length>1200)break;
+      if(text){context=text;group=p;}
+      if(/\b(?:confidence|submit|check|verify|next|continue|proceed)\b/i.test(text))break;
+    }
+    const confidence=/\bconfidence\b/i.test(context)&&/\b(?:submit|send|record)\b.*\b(?:answer|response)\b/i.test(context);
+    let kind=navigationKind(label);
+    // Unknown labels inside a current-answer submission group still have a known effect.
+    if(!kind&&/\b(?:submit|send|record)\b.*\b(?:your |the |this |current )?(?:answer|response)\b/i.test(context))kind='answer_submit';
+    if(confidence)kind='answer_submit';
+    // Final hand-in language always wins over an ordinary navigation label.
+    if(/\b(?:submit|finish|hand in|turn in)\b.*\b(?:assignment|quiz|test|assessment|all answers)\b/i.test(label))kind='submit';
+    if(!kind&&e.matches('a[href]'))return null; // do not turn arbitrary destination links into workflow actions
+    return {kind:kind||'unknown',label,context,group:key(group||e),confidence,
+      allowed_actions:kind?[kind]:['check','answer_submit','advance']};
+  }
   const textExcluded='script,style,template,nav,output,[role=listbox],[role=option],[role=status],[role=alert],[class*=feedback],[class*=result],[class*=correct],[class*=grade],[class*=score],[class*=saved],[class*=attempt],#__assignment_lab_cursor,#__assignment_lab_badges';
   const liveFeedback=e=>e.hasAttribute('aria-live')&&!e.querySelector('input,textarea,select,button,[tabindex],[role=radio],[role=checkbox]')&&/^(?:(?:correct|incorrect|wrong)[.!]?$|(?:the )?correct answer(?:\s+is\b|\s*:)|your answer(?:\s+is\b|\s*:)|you (?:answered|selected)\b)/i.test(norm(e.innerText));
   const shown=e=>!!e?.isConnected&&!e.closest('[hidden],[aria-hidden=true],script,style,template')&&getComputedStyle(e).visibility!=='hidden'&&getComputedStyle(e).display!=='none'&&!!e.getClientRects().length;
@@ -77,7 +107,7 @@
     const excluded=textExcluded+',aside,header,footer,nav,[role=toolbar],[role=tablist],[role=menu],[role=navigation],[role=banner],[role=contentinfo]';
     const auxiliary=/^(?:show|hide|toggle)?\s*(?:hint|bookmark|sound|audio|mute|settings|help|favorite|draw|start over|skip|report|share|flag)\b/i;
     // A link with a destination is navigation on every site (breadcrumbs, course lists), never an answer choice.
-    const pool=all(root,'button,[role=button],[aria-pressed],[tabindex]').filter(e=>shown(e)&&safe(e)&&!e.matches('input,textarea,select,td,th,[role=gridcell],[role=tab],svg,canvas,a[href]')&&!assertedParts.has(e)&&!e.closest('a[href]')&&!known.some(k=>k===e||k.contains(e))&&!e.closest(excluded)&&!forbidden.test(name(e))&&!navigationKind(name(e))&&!auxiliary.test(name(e))&&(e.tabIndex>=0||e.hasAttribute('aria-pressed')));
+    const pool=all(root,'button,[role=button],[aria-pressed],[tabindex]').filter(e=>shown(e)&&safe(e)&&!e.matches('input,textarea,select,td,th,[role=gridcell],[role=tab],svg,canvas,a[href]')&&!assertedParts.has(e)&&!e.closest('a[href]')&&!known.some(k=>k===e||k.contains(e))&&!e.closest(excluded)&&!forbidden.test(name(e))&&!navigationKind(name(e))&&!navigationInfo(e)?.confidence&&!auxiliary.test(name(e))&&(e.tabIndex>=0||e.hasAttribute('aria-pressed')));
     const nodes=pool.slice(0,400);
     const leaves=nodes.filter(e=>!nodes.some(n=>n!==e&&e.contains(n))),byContainer=new Map();
     for(const e of leaves){
@@ -464,9 +494,10 @@
       s.answer_result=outcome?(outcome.matches('[data-testid="icon-close-x"]')?'incorrect':'correct'):null;
     }
     const menus=all(document,'[role=listbox] [role=option]').filter(shown).map(e=>{const c=owner(e,cells);return {label:name(e),target:target(e),owner:c?slotKey(c):null,disabled:!!e.disabled||e.getAttribute('aria-disabled')==='true'}});
-    const navigation=all(document,'button,a,[role=button],input[type=submit]').filter(shown).map(e=>{
-      const label=name(e)||e.value||'',kind=navigationKind(label);
-      return kind?{kind,label,target:target(e),disabled:!!e.disabled||e.getAttribute('aria-disabled')==='true'}:null}).filter(Boolean);
+    const navigation=all(document,'button,a,[role=button],input[type=submit],input[type=button]').filter(e=>shown(e)&&safe(e)&&!slots.some(s=>targets.get(s.target)===e||s.choices?.some(c=>targets.get(c.target)===e))).map(e=>{
+      const info=navigationInfo(e);
+      return info?{...info,target:target(e),disabled:!!e.disabled||e.getAttribute('aria-disabled')==='true'||!!e.closest('[inert]')}:null}).filter(Boolean);
+    const navigation_complete=navigation.length<=60;
     const feedback=all(document,'[role=status],[role=alert],output,.feedback,.correct-answer').filter(shown).map(e=>norm(e.innerText)).join(' ');
     const locked=/correct|incorrect|your answer/i.test(feedback)&&slots.length>0&&slots.every(s=>s.disabled||s.choices?.every(c=>c.disabled));
     const page_state=/assignment (?:is )?(?:complete|submitted)/i.test(feedback)?'complete':locked?'locked':'answering';
@@ -488,7 +519,7 @@
       return [...groups.entries()]
         .filter(([,members])=>members.length>=2&&members.length<=12&&members.some(partSelected)&&!elements.some(a=>members.some(m=>m.contains(a))))
         .slice(0,3).map(([box,members])=>({group:key(box),members:members.map(e=>({target:target(e),label:name(e)||norm(e.value)||'',selected:partSelected(e)}))}));})();
-    last={observation_id,question_key,identity,document_id:doc,question:stem.text||norm(document.title),tables:tableContext.tables,table_context_complete:tableContext.complete,slots,menus,navigation,feedback,page_state,enumeration,parts:partList,candidate_parts,
+    last={observation_id,question_key,identity,document_id:doc,question:stem.text||norm(document.title),tables:tableContext.tables,table_context_complete:tableContext.complete,slots,menus,navigation:navigation.slice(0,60),navigation_complete,feedback,page_state,enumeration,parts:partList,candidate_parts,
       save_state:/\bsaved\b/i.test(feedback)?'confirmed':/\bsaving\b/i.test(feedback)?'pending':'unavailable',
       grade_state:/incorrect|wrong/i.test(feedback)?'incorrect':/partial/i.test(feedback)?'partial':/correct/i.test(feedback)?'correct':'unknown',
       discovery_complete:discovered.complete,completeness:{complete:!incomplete&&!limited,note:(incomplete||limited)?'QUESTION_INCOMPLETE: traversal or identity limit; inspect a smaller question.':''},targets,
