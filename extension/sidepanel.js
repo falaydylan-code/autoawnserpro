@@ -147,7 +147,7 @@ $('copylog').onclick = async () => {
     if (e.click_details) bits.push('  Click details:\n' + JSON.stringify(e.click_details, null, 2));
     if (e.scroll_details) bits.push('  Scroll details:\n' + JSON.stringify(e.scroll_details, null, 2));
     for(const key of ['slot_count','screenshot_attached','dom_log_truncated','dom_log_characters','frame_id','target','inspection_source','opening_control','menu_scroll'])if(e[key]!=null)bits.push('  '+key+': '+JSON.stringify(e[key]));
-    for(const key of ['request_id','model','requested_model','provider','reasoning_tokens','finish_reason','response_kind','output_format','format_corrections','phase','question_key','slot_key','task_id','adapter','requested_value','actual','failure_code','document_id','observation_id','action_executed','entry_verified','save_state','grade_state','duration'])if(e[key]!=null)bits.push('  '+key+': '+JSON.stringify(e[key]));
+    for(const key of ['request_id','model','requested_model','provider','reasoning_tokens','finish_reason','response_kind','output_format','format_corrections','phase','question_key','slot_key','task_id','adapter','requested_value','actual','failure_code','failure_data','document_id','observation_id','action_executed','entry_verified','save_state','grade_state','duration'])if(e[key]!=null)bits.push('  '+key+': '+JSON.stringify(e[key]));
     return bits.join('\n');
   });
   const header = `Assignment Lab 2.0 log - ${new Date().toLocaleString()}\n`

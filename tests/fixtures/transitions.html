@@ -9,6 +9,12 @@
        check=top     Check writes the grade into the SHELL's status, the frame is untouched
        check=stem    Check reloads the frame with the grade AND a rewritten question stem (a different question)
        check=none    Check does nothing
+       check=rebuild Check DESTROYS the question iframe and inserts a new one at the graded address (McGraw Connect,
+                     Ch.3 Q1 2026-09-24 12:10 AM). A new element gets a new browser frame id (1747 -> 1752 live), unlike
+                     check=reload, which navigates the same element and keeps its id -- which is why reload passed here
+                     and the real site did not.
+       check=rebuildstem  Check rebuilds the frame AND rewrites the question stem: a genuinely different question
+       next=rebuild  Next destroys the frame and builds a new one holding question n+1
        delay=<ms>    the reload after Check starts that long after the click
        slow=1        the reloaded frame shows its answer field only 800 ms after it loads (half-loaded meanwhile)
        next=reload   (default) Next loads question n+1 into the frame (new document, new question)
@@ -31,15 +37,20 @@ const params=new URLSearchParams(location.search),mode={check:params.get('check'
 window.answers={};window.clicks=[];window.loads=[];let n=1;
 frame.src='transitions_q.html?q=1'+(params.get('stray')?'&stray=1':'');   // stray applies from the first document; slow only to reloads
 const extra=()=>(params.get('slow')?'&slow=1':'')+(params.get('stray')?'&stray=1':'');
-const load=(q,graded,stem)=>{frame.src=`transitions_q.html?q=${q}${graded?'&graded=1':''}${stem?'&stem=revised':''}${extra()}`};
+const src=(q,graded,stem)=>`transitions_q.html?q=${q}${graded?'&graded=1':''}${stem?'&stem=revised':''}${extra()}`;
+const load=(q,graded,stem)=>{document.getElementById('frame').src=src(q,graded,stem)};
+const rebuild=(q,graded,stem)=>{const f=document.createElement('iframe');f.id='frame';f.src=src(q,graded,stem);document.getElementById('frame').replaceWith(f);window.rebuilds=(window.rebuilds||0)+1};
 check.onclick=()=>{clicks.push('check');
   if(mode.check==='reload')setTimeout(()=>load(n,true),Number(params.get('delay')||0));
-  else if(mode.check==='redraw')frame.contentWindow.grade();
+  else if(mode.check==='redraw')document.getElementById('frame').contentWindow.grade();
   else if(mode.check==='top')verdict.textContent='Correct';
-  else if(mode.check==='stem')load(n,true,true);};
+  else if(mode.check==='stem')load(n,true,true);
+  else if(mode.check==='rebuild')setTimeout(()=>rebuild(n,true),Number(params.get('delay')||0));
+  else if(mode.check==='rebuildstem')rebuild(n,true,true);};
 next.onclick=()=>{clicks.push('next');verdict.textContent='';
   if(mode.next==='reload'){n++;position.textContent=`Question ${n} of 3`;load(n)}
-  else if(mode.next==='swap'){n++;position.textContent=`Question ${n} of 3`;frame.contentWindow.show(n)}
+  else if(mode.next==='swap'){n++;position.textContent=`Question ${n} of 3`;document.getElementById('frame').contentWindow.show(n)}
   else if(mode.next==='same')load(n);
+  else if(mode.next==='rebuild'){n++;position.textContent=`Question ${n} of 3`;rebuild(n)}
   if(n>=3)next.disabled=true;};
 </script>

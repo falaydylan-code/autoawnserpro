@@ -45,10 +45,14 @@
     default:return '';}};
   // What changed between two identity snapshots: the frame set, or per frame the stem text, the control structure,
   // the position or the tab strip. 'unknown' when a snapshot is missing (a question resumed from an older ledger).
+  // Says WHAT moved, all of it. It used to return at the first difference, so a changed frame set hid whether the
+  // question's own text had moved too -- the 12:10 AM Ch.3 log said only "frames", and nobody could tell whether
+  // that was the whole story. Frames are matched by their own fingerprint; position is a fallback used only to
+  // describe a difference, never to decide anything.
   const identityMovers=(was,now)=>{if(!was?.detail||!now?.detail)return 'unknown';
-    if(was.frames.join()!==now.frames.join())return `frames ${JSON.stringify(was.frames)} -> ${JSON.stringify(now.frames)}`;
-    const moved=[];for(const a of was.detail){const b=now.detail.find(d=>d.frame_id===a.frame_id);if(!b)continue;
-      for(const k of ['stem','structure','position','tabs'])if(a[k]!==b[k])moved.push(k+(was.detail.length>1?'@frame '+a.frame_id:''))}
+    const moved=[];if(was.frames.join()!==now.frames.join())moved.push(`frames ${JSON.stringify(was.frames)} -> ${JSON.stringify(now.frames)}`);
+    for(const [i,a] of was.detail.entries()){const b=now.detail.find(d=>d.frame===a.frame)||now.detail[i];if(!b)continue;
+      for(const k of ['stem','structure','position','tabs'])if(a[k]!==b[k])moved.push(k+(was.detail.length>1?'@frame '+(a.frame_id??i):''))}
     return moved.length?moved.join(', '):'no ingredient reported'};
   class Fault extends Error{constructor(code,detail,actual=null){super(code+': '+detail);this.code=code;this.actual=actual}}
   const requireOK=r=>{if(!r?.ok)throw new Fault(r?.code||'INPUT_NO_EFFECT',r?.detail||'Browser operation failed.',r?.data??null);return r};
@@ -148,11 +152,24 @@
         const {parent,child}=owners[0],above=frameOffset(parent,seen);return above?{x:above.x+child.x,y:above.y+child.y}:null};
       for(const f of frames)f.measured_offset=frameOffset(f);
       const active=frames.filter(f=>f.slots.length),members=frames.filter(f=>f.slots.length||f.parts?.length),used=members.length?members:frames;
-      const question_key=hash(used.map(f=>f.frame_id+':'+f.question_key).join('|'));
+      // Chrome's frame id is a handle for the iframe ELEMENT, good for sending a message to it right now and nothing
+      // else: McGraw grades "Check my work" by destroying the question iframe and building a new one, Chrome numbers
+      // it afresh (1747 -> 1752, Ch.3 Q1 12:10 AM), and a key that contained the number read the same graded question
+      // as a different one -> TARGET_STALE after a correct answer. Each frame's own key already holds its address
+      // (location.pathname + hash), its question text and its answer layout (planner_content.js :444), so the number
+      // added nothing but instability. It stays on the frame for routing and for the log; it never enters identity.
+      const question_key=hash(used.map(f=>f.question_key).join('|'));
       // Which frames and which ingredients (hashed) made the key: when it moves, the log can say what moved.
-      const identity={frames:used.map(f=>f.frame_id),detail:used.map(f=>({frame_id:f.frame_id,...(f.identity||{})}))};
+      // A frame is NAMED by its address -- origin, path and hash, the same parts its own key reads -- so "frames moved"
+      // means a different frame appeared or left, not that a frame's content changed (that is stem/structure/tabs and
+      // is reported as itself). Two frames at one address are told apart by order. Its content fingerprint would have
+      // been stable too, but it changes whenever the question does, so every stop would also have read "frames".
+      const seenAt=new Map(),frameName=f=>{let a;try{const u=new URL(f.url);a=u.origin+u.pathname+u.hash}catch{a=f.question_key}const n=(seenAt.get(a)||0)+1;seenAt.set(a,n);return n>1?a+'#'+n:a};
+      const names=used.map(frameName);
+      const identity={frames:names,detail:used.map((f,i)=>({frame:names[i],frame_id:f.frame_id,...(f.identity||{})}))};
       const document_id=hash(frames.map(f=>f.frame_id+':'+f.document_id+':'+f.browser_document).join('|'));
-      const slots=active.flatMap(f=>f.slots.map(s=>({...s,slot_key:question_key+'/'+f.frame_id+'/'+s.slot_key,local_slot:s.slot_key,frame_id:f.frame_id,frame:f})));
+      // A frame's own slot key already begins with that frame's fingerprint, so the frame number is not needed here either.
+      const slots=active.flatMap(f=>f.slots.map(s=>({...s,slot_key:question_key+'/'+s.slot_key,local_slot:s.slot_key,frame_id:f.frame_id,frame:f})));
       // Excluding an unrelated frame is fine as long as a readable frame still
       // holds answer slots. If nothing readable has a slot AND a frame was
       // excluded, the question may have lived in the excluded frame: say so
@@ -178,7 +195,9 @@
         page_state:frames.find(f=>f.page_state!=='answering')?.page_state||'answering',host:frames[0].host,
         navigation:frames.flatMap(f=>f.navigation.map(n=>({...n,frame:f}))),navigation_complete:frames.every(f=>f.navigation_complete!==false)&&frames.reduce((sum,f)=>sum+f.navigation.length,0)<=60,feedback:frames.map(f=>f.feedback).filter(Boolean).join('; '),
         grade_state:frames.find(f=>f.grade_state!=='unknown')?.grade_state||'unknown',save_state:frames.some(f=>f.save_state==='pending')?'pending':frames.some(f=>f.save_state==='confirmed')?'confirmed':'unavailable',visual:frames.some(f=>f.visual)};
-      if(new Set(slots.map(s=>s.slot_key)).size!==slots.length)throw new Fault('TARGET_AMBIGUOUS','Duplicate logical slots.');
+      // Without the frame number, two question areas that are truly identical -- same address, same text, same answer
+      // layout -- name their answers the same way. That is a real ambiguity, not a bug to paper over: stop and say so.
+      if(new Set(slots.map(s=>s.slot_key)).size!==slots.length)throw new Fault('TARGET_AMBIGUOUS','Two question areas on this page look identical (same address, text and answer layout); the harness will not guess which is which.');
       return obs;
     }
     same(obs){if(!this.current)throw new Fault('TARGET_STALE','No question is in progress; pending task discarded.');
@@ -1192,7 +1211,8 @@
             if(next.length>1)throw new Fault('TARGET_AMBIGUOUS','More than one Next control.');this.ledger.status='finished';await this.event('FINISH','Observed question complete. No unique next-question control found.');break;
           }
           const checkedNext=await this.freshNavigation(nextDecision);obs=checkedNext.obs;next[0]=checkedNext.candidate;
-          const signature=obs.question_key+':'+next[0].frame.frame_id+':'+next[0].target;
+          // Stored in the ledger and compared on later passes, so it takes the frame's fingerprint, not its number.
+          const signature=obs.question_key+':'+next[0].frame.question_key+':'+next[0].target;
           this.ledger.navigationSent||=[];
           if(navigationStates.has(signature)||this.ledger.navigationSent.includes(signature))throw new Fault('REPEATED_STATE','Navigation was already attempted for this question. Review the result before another click.');
           navigationStates.add(signature);this.ledger.navigationSent.push(signature);await this.persist();

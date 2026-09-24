@@ -141,3 +141,49 @@ def test_the_guard_names_the_frame_and_how_it_moved(extension):
       try{await e.guard();return {ok:true}}catch(x){return {message:x.message,data:x.actual,child}}}''', tid)
     assert out['message'].startswith(f"TARGET_STALE: Document was replaced (frame {out['child']} ") and out['data']['frame_id'] == out['child']
     assert out['data']['reason'] in ('replaced', 'unreachable') and out['data']['was']
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# A Check that DESTROYS the question iframe and builds a new one (0.10.47)
+#
+# McGraw Connect Ch.3 Q1 (2026-09-24 12:10 AM, 0.10.46): twelve cells across two tabs entered and verified, the page
+# graded it "Answer is complete and correct", and the run died on its own Check click:
+#   TARGET_STALE: Question identity changed after Check (frames [1747] -> [1752]); the graded page was not entered.
+# check=reload above NAVIGATES the same iframe element, so Chrome keeps its frame id and this file passed -- McGraw
+# REPLACES the element, and a new element gets a new id. The id was inside the question key (planner_runtime.js :151)
+# and inside every slot key (:155). It is a handle for sending a message to the frame right now, never an identity:
+# each frame's own key already holds its address, question text and answer layout.
+# ---------------------------------------------------------------------------------------------------------------
+
+
+def test_a_check_that_rebuilds_the_question_frame_keeps_the_question_and_moves_on(extension):
+    page, w, tid = navigate(extension, 'transitions.html?check=rebuild')
+    result = run(w, tid)
+    assert result['status'] == 'finished', result['events'][-3:]
+    assert page.evaluate('window.rebuilds') == 3                                                       # the element really was replaced each time
+    assert result['questions'] == 3 and not stale(result)
+    assert page.evaluate('window.answers') == {'1': '42', '2': '42', '3': '42'}
+    assert len(details(result, 'Website feedback received')) == 3                                      # each graded page adopted, not refused
+    assert page.evaluate('window.clicks') == ['check', 'next', 'check', 'next', 'check']
+
+
+def test_next_that_rebuilds_the_frame_still_reaches_every_question(extension):
+    page, w, tid = navigate(extension, 'transitions.html?check=rebuild&next=rebuild')
+    result = run(w, tid)
+    assert result['status'] == 'finished', result['events'][-3:]
+    assert page.evaluate('window.rebuilds') == 5 and result['questions'] == 3 and not stale(result)
+    assert page.evaluate('window.answers') == {'1': '42', '2': '42', '3': '42'}
+
+
+def test_a_rebuilt_frame_holding_a_different_question_still_stops_and_says_everything_that_moved(extension):
+    """The guard is kept, only its input is fixed: a rebuild that brings a DIFFERENT question must still stop, nothing
+    typed into it. And the message must name every ingredient that moved -- it used to return at the first difference,
+    so a frame change hid whether the question's own text had changed too."""
+    page, w, tid = navigate(extension, 'transitions.html?check=rebuildstem')
+    result = run(w, tid)
+    assert result['status'] == 'needs_review'
+    stop = stale(result)[0]
+    assert stop['detail'].startswith('TARGET_STALE: Question identity changed after Check'), stop['detail']
+    assert 'stem' in stop['detail'], stop['detail']                                                   # not hidden behind "frames"
+    assert page.evaluate('window.answers') == {'1': '42'}                                              # nothing entered into the new page
+    assert page.evaluate('window.clicks') == ['check']
