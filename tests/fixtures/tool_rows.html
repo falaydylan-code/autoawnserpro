@@ -1,0 +1,93 @@
+<!doctype html><meta charset="utf-8"><title>Multiple choice with a per-option tool rail and page chrome</title>
+<style>
+ body{font:16px sans-serif;margin:0}main{padding:16px;max-width:760px}
+ #board{display:grid;grid-template-columns:1fr auto auto;gap:6px 10px;align-items:start}
+ #choices,#tools,#flags{display:grid;gap:6px}
+ .opt{text-align:left;padding:10px;border:1px solid #888;background:#fff}
+ .opt[aria-checked=true]{background:#dde9ff;border-color:#2b6}
+ .tool{padding:10px;border:1px solid #bbb;background:#f6f6f6}
+ .tool[aria-pressed=true]{text-decoration:line-through;background:#eee}
+ .plain{padding:10px}
+ #aids,#pager{display:flex;gap:10px;margin-top:18px}
+ #aids button,#pager button{padding:8px 14px}
+</style>
+<!-- Formative's macroeconomics quiz as it stopped the run (2026-09-24 1:00 AM, 0.10.46). Every answer option is a
+     <button role=radio> -- HTMLButtonElement.type reads "button", which used to beat the role and type the group
+     pick-MANY -- and beside the options runs a rail of "Strikethrough this option - <that option>" buttons, one per
+     option, in their own container (that is why their labels arrived clean in the log). Those four are repeated
+     siblings with unique labels in a scope whose text settles pick-one, so discovery offered them as a SECOND
+     answer group; the backend then required a plan for every resolved slot, and the model was being asked to cross
+     out its own correct answer. It refused and the run died QUESTION_INCOMPLETE.
+     Below the board sit the sibling pairs the live page also carries: "Get a hint 2" / "Feedback", and
+     "Previous" / "Next" -- each arrives as its own two-member candidate group because the pool filter judges one
+     control at a time.
+     The option labels deliberately share the tail "unemployment", so stripping a shared prefix AND suffix together
+     would mirror nothing: the prefix has to be tried on its own.
+     ?params
+       tools=none      no tool rail (the plain question)
+       tools=distinct  the rail shares a phrase but mirrors nothing: "Cross out A".."Cross out D"
+       tools=partial   three tools for four options: not a one-for-one mirror, so it stays an answer group
+       tools=only      the options are plain text, so the rail is the ONLY choice-like group: never suppressed
+       mirror=both     a second rail ("Highlight - <option>"): two tool rails that could try to cancel each other
+                       out. Not "Flag": that word is already in the auxiliary list and never reaches discovery.
+       chrome=none     no hint/feedback or pager pair
+       chrome=answer   the pager pair carries role=radio -- the page marks it up as an answer group, so it is kept
+       plain=1         option labels with no shared tail, so the mirror has to come through the prefix
+-->
+<main data-question-id="formative-q1">
+  <h1>Required 1</h1>
+  <p id="stem">Which type of unemployment is most closely associated with workers who are between jobs or searching
+     for their first job? Select one answer.</p>
+  <div id="board">
+    <div id="choices"></div>
+    <div id="tools"></div>
+    <div id="flags"></div>
+  </div>
+  <div id="aids"><button>Get a hint 2</button><button>Feedback</button></div>
+  <div id="pager"><button>Previous</button><button>Next</button></div>
+</main>
+<script>
+const p = new URLSearchParams(location.search);
+const TAIL = p.get('plain') ? '' : ' unemployment';
+const OPTIONS = ['Seasonal', 'Cyclical', 'Frictional', 'Structural'].map(w => w + TAIL);
+window.picked = [];
+window.struck = [];
+window.flagged = [];
+
+function option(label) {
+  const b = document.createElement('button');
+  b.type = 'button';                      // the DOM property that used to beat role=radio
+  b.className = 'opt';
+  b.setAttribute('role', 'radio');
+  b.setAttribute('aria-checked', 'false');
+  b.textContent = label;
+  b.onclick = () => {
+    for (const o of choices.querySelectorAll('.opt')) o.setAttribute('aria-checked', 'false');
+    b.setAttribute('aria-checked', 'true');
+    window.picked = [label];
+  };
+  return b;
+}
+function tool(text, label, sink) {
+  const t = document.createElement('button');
+  t.type = 'button';
+  t.className = 'tool';
+  t.setAttribute('aria-pressed', 'false');
+  t.textContent = text;
+  t.onclick = () => { t.setAttribute('aria-pressed', 'true'); sink.push(label); };
+  return t;
+}
+
+const mode = p.get('tools') || 'mirror';
+OPTIONS.forEach((label, i) => {
+  if (mode === 'only') choices.append(Object.assign(document.createElement('div'), {className: 'plain', textContent: label}));
+  else choices.append(option(label));
+  if (mode === 'mirror' || mode === 'only') tools.append(tool('Strikethrough this option — ' + label, label, window.struck));
+  else if (mode === 'distinct') tools.append(tool('Cross out ' + 'ABCD'[i], label, window.struck));
+  else if (mode === 'partial' && i < 3) tools.append(tool('Strikethrough this option — ' + label, label, window.struck));
+  if (p.get('mirror') === 'both') flags.append(tool('Highlight — ' + label, label, window.flagged));
+});
+
+if (p.get('chrome') === 'none') { aids.remove(); pager.remove(); }
+if (p.get('chrome') === 'answer') for (const b of pager.querySelectorAll('button')) { b.setAttribute('role', 'radio'); b.setAttribute('aria-checked', 'false'); }
+</script>
