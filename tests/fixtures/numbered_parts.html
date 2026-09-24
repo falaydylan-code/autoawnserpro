@@ -1,0 +1,41 @@
+<!doctype html><meta charset="utf-8"><title>A question whose parts are plain numbered buttons</title>
+<style>body{font:16px sans-serif;margin:20px}main{max-width:900px}#switch{display:flex;gap:6px;margin:10px 0}
+#switch button{border:1px solid #888;padding:4px 12px}#switch button[aria-pressed=true]{font-weight:bold;background:#eee}
+td,th{border:1px solid #888;padding:4px 8px}table{border-collapse:collapse}input{width:120px}</style>
+<!-- No role=tab anywhere: the wording names two parts and the page switches between them with a row of plain
+     numbered buttons. Nothing here is a part on sight; the harness may only reach them when the model's reading of
+     the wording says more parts exist than the page declared. ?params:
+       nomarker=1   the buttons never say which one is current (aria-pressed removed) -> not a candidate at all
+       chrome=1     the row is Previous/Next instead of 1/2 -> labels are not part names
+       inert=1      the buttons are marked current but clicking them changes nothing -> asserted, then refused -->
+<main>
+  <h2>Problem 4-2 Adjusting entries</h2>
+  <p id="stem"><strong>Required:</strong> 1. Prepare the adjusting entry for March. 2. Prepare the adjusting entry for
+  April. Note: enter the debit amount for each month in the cell provided below.</p>
+  <div id="switch">
+    <button type="button" aria-pressed="true">1</button>
+    <button type="button" aria-pressed="false">2</button>
+  </div>
+  <div id="body"></div>
+</main>
+<script>
+const params=new URLSearchParams(location.search);
+const MONTH=['March','April'],CELL='0_table0_cell_c1_r0';
+window.switchClicks=[];window.values=[{},{}];let selected=0;
+function render(i){
+  document.getElementById('body').innerHTML=`<p id="month">${MONTH[i]} adjusting entry</p>`+
+    `<table id="0_table0"><tr><th>Debit</th><td><input id="${CELL}" aria-label="Debit amount"></td></tr></table>`;
+  const e=document.getElementById(CELL);e.value=window.values[i][CELL]||'';e.oninput=()=>{window.values[i][CELL]=e.value};
+}
+function show(i){
+  window.switchClicks.push(i+1);
+  if(params.get('inert'))return;
+  selected=i;
+  for(const [j,b] of [...document.querySelectorAll('#switch button')].entries())b.setAttribute('aria-pressed',String(j===i));
+  render(i);
+}
+if(params.get('chrome')){const [a,b]=document.querySelectorAll('#switch button');a.textContent='Previous';b.textContent='Next'}
+if(params.get('nomarker'))for(const b of document.querySelectorAll('#switch button'))b.removeAttribute('aria-pressed');
+for(const [i,b] of [...document.querySelectorAll('#switch button')].entries())b.onclick=()=>show(i);
+render(0);
+</script>

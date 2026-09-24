@@ -171,7 +171,8 @@
       // bounded under the backend's question limit.
       const fullQuestionText=[...new Set(frames.map(f=>f.question).filter(Boolean))].join('\n'),questionText=fullQuestionText.slice(0,60000);
       const parts=frames.flatMap(f=>(f.parts||[]).map(p=>({...p,frame_id:f.frame_id,frame:f})));
-      const obs={question_key,identity,document_id,observation_id:crypto.randomUUID(),question:questionText,tables,table_context_complete,slots,frames,parts,discovery_complete:frames.every(f=>f.discovery_complete!==false),
+      const candidateParts=frames.flatMap(f=>(f.candidate_parts||[]).map(g=>({...g,frame_id:f.frame_id,frame:f})));
+      const obs={question_key,identity,document_id,observation_id:crypto.randomUUID(),question:questionText,tables,table_context_complete,slots,frames,parts,candidate_parts:candidateParts,discovery_complete:frames.every(f=>f.discovery_complete!==false),
         completeness:{complete:fullQuestionText.length<=60000&&slots.length<=100&&frames.every(f=>f.completeness.complete),note:(fullQuestionText.length>60000?'Question context exceeds 60000 characters; missing context must be recovered. ':'')+(slots.length>100?'More than 100 answer slots; narrow the question scope. ':'')+frames.map(f=>f.completeness.note).filter(Boolean).join('; ')},
         enumeration:frames.find(f=>f.enumeration)?.enumeration||null,
         page_state:frames.find(f=>f.page_state!=='answering')?.page_state||'answering',host:frames[0].host,
@@ -794,7 +795,16 @@
       for(let round=0;;round++){
         await this.reconcile();await this.visualGate();
         const found=Math.max(1,this.current.parts?.length||1),declared=Math.max(1,this.current.plan.parts_declared||1);
-        if(declared>found)throw new Fault('QUESTION_INCOMPLETE',`PART_UNREACHABLE: the instruction names ${declared} parts but only ${found} could be revealed; a person must finish the rest.`,{parts_declared:declared,parts_found:found});
+        if(declared>found){
+          // The wording promises parts the page did not declare with role=tab. Before giving the question back,
+          // look once for a switcher the page built out of plain controls. The model supplied a COUNT and nothing
+          // else: which controls exist, whether they are a group, whether one of them is current, and whether a
+          // click changed anything are all the page's answers. A candidate that reveals nothing is dropped, the
+          // run stops with the same fault, and no further clicking is attempted on this question.
+          const reached=await this.reachDeclaredParts(declared,found);
+          if(reached){await this.event('OBSERVE',`The wording names ${declared} parts and the page declared ${found}; a part switcher was found and every part revealed.`,{parts_declared:declared,parts_found:reached});continue}
+          throw new Fault('QUESTION_INCOMPLETE',`PART_UNREACHABLE: the instruction names ${declared} parts but only ${found} could be revealed; a person must finish the rest.`,{parts_declared:declared,parts_found:found});
+        }
         const views=[];const recheck=async o=>{for(const sl of o.slots)if(sl.kind==='unresolved')delete this.current.interactionActions?.[sl.slot_key];return this.resolveInteractions(o)};
         if(this.current.parts?.length>1){for(const part of this.current.parts)views.push(await recheck(await this.showPart(null,part.part_id)))}else{const after=await this.observe();this.same(after);views.push(await recheck(after))}
         const newSlots=views.flatMap(v=>v.slots).filter(s=>!this.current.plan.tasks.some(t=>t.slot_key===s.slot_key)&&s.kind!=='unresolved');
@@ -875,6 +885,44 @@
     }
     // Parts. A tab strip means only the selected part's controls are visible. Reveal each part by clicking its tab
     // (what a student does), observe it while visible, and plan across the union -- nothing hidden is ever read.
+    // The wording named more parts than the page declared with role=tab. One attempt, once per question, to reach
+    // them: the page reports groups of plain controls that LOOK like a part switcher (a row of numbers, "Required 2")
+    // and that show which member is current; the harness asks the page to treat the smallest sufficient one as the
+    // parts, and keeps it only if the page then reports it as this question's parts. The model's contribution is the
+    // count alone -- it never names a control and never clicks one. A group that is refused is logged and dropped;
+    // if none promotes the caller stops the question exactly as before.
+    async reachDeclaredParts(declared,found){
+      if(this.current.partSearch)return 0;
+      this.current.partSearch=true;
+      let obs=await this.observe();this.same(obs);
+      const groups=(obs.candidate_parts||[]).filter(g=>g.members.length>=declared).sort((a,b)=>a.members.length-b.members.length);
+      if(!groups.length){await this.event('OBSERVE',`The wording names ${declared} parts; the page declared ${found} and shows no part switcher the harness can read back.`,{parts_declared:declared,parts_found:found});return 0}
+      for(const g of groups.slice(0,2)){
+        let r;
+        try{r=await this.inspect(g.frame,g.members[0].target,'assert_parts',{group:g.group})}
+        catch(e){await this.event('INSPECT',`A candidate part switcher could not be inspected: ${e.message}`,{group:g.group});continue}
+        if(!r.promoted){await this.event('INSPECT',`A candidate part switcher was refused: ${r.reason||'the page did not report it as this question\'s parts'}.`,{group:g.group,labels:g.members.map(m=>m.label).slice(0,12)});continue}
+        await this.event('INSPECT',`Treating ${r.parts.length} page controls as this question's parts: ${r.parts.map(p=>p.label).join(', ')}.`,{group:g.group});
+        // Reading the same page as multi-part changes the question's own fingerprint: a tab signature appears and
+        // the part's contents leave the structure. The PAGE did not change -- the harness did -- so the question is
+        // re-pinned under its new key rather than abandoned as stale, the same way a page the harness reloaded on
+        // purpose is re-pinned. Its ledger record moves with it so nothing is answered twice under two names.
+        const after=await this.observe();
+        if(after.question_key!==this.current.key){
+          await this.event('OBSERVE',`Reading the question as ${r.parts.length} parts changed its fingerprint (${identityMovers(this.current.identity,after.identity)}); re-pinned, the page is unchanged.`,{was:this.current.key,now:after.question_key});
+          delete this.ledger.questions[this.current.key];
+          this.current.key=after.question_key;
+          this.ledger.questions[after.question_key]=this.current;
+        }
+        this.repin(after);
+        obs=await this.revealParts(after);
+        this.current.parts=obs.parts.map(p=>({part_id:p.part_id,label:p.label}));
+        for(const s of obs.slots)if(s.part_id)(this.current.slot_parts||={})[s.slot_key]=s.part_id;
+        await this.persist();
+        return this.current.parts.length;
+      }
+      return 0;
+    }
     async showPart(obs,partId){
       let o=obs||await this.observe();if(!o.parts?.length)return o;
       if(o.parts.find(p=>p.selected)?.part_id===partId)return o;
@@ -888,7 +936,13 @@
       do{await sleep(120);o=await this.observe();
         if(o.document_id!==this.current.document)throw new Fault('TARGET_STALE','Document was replaced while switching parts.',{document:{was:this.current.document,now:o.document_id}});
         const frame=o.frames.find(f=>f.frame_id===part.frame_id);selected=o.parts.find(p=>p.selected)?.part_id===partId;
-        owned=selected&&!!frame&&(o.slots.some(s=>s.frame_id===part.frame_id&&s.part_id===partId&&['panel','inferred'].includes(s.part_scope))||['locked','complete'].includes(frame.page_state));
+        // Ownership is judged by what is there, not by how well the page labelled it. Asking for a slot scoped
+        // 'panel' or 'inferred' asked the PAGE to say which controls belong to the selected tab; a page that
+        // half-declares its tabs (Ch.3 Q1, 9:32 PM: role=tabpanel elements that no tab claims via aria-controls)
+        // says neither, so every slot fell to 'fallback' and a tab that was plainly selected, with its cells on
+        // screen, could never be accepted. The tab is lit, the frame holds answer controls, and no OTHER part
+        // claims them: they are this part's. The scope labels still do their own job in the identity key.
+        owned=selected&&!!frame&&(o.slots.some(s=>s.frame_id===part.frame_id&&(s.part_id||partId)===partId)||['locked','complete'].includes(frame.page_state));
         if(!selected||!owned||frame?.identity?.busy){previous=null;continue}
         const signature=[o.slots.map(s=>s.slot_key).sort().join('|'),o.question_key,frame.identity?.part_content].join('#');
         if(previous===signature){this.same(o);return o}previous=signature;
@@ -901,6 +955,9 @@
       // choices read, exactly as a single-part question is. Then the parts are merged into one observation.
       const prepare=async o=>{o=await this.resolveInteractions(o);return this.discoverSelectionOptions(o)};
       if(!obs.parts||obs.parts.length<2)return prepare(obs);
+      // Which part is showing is the one thing a tab strip must say. Without it every part's slots key the same way
+      // and one part's answer would be written under another's name; the harness stops instead of choosing.
+      if(!obs.parts.some(p=>p.selected))throw new Fault('TARGET_MISSING',`The question has ${obs.parts.length} parts but the page does not say which one is showing; an answer cannot be tied to a part.`,{parts:obs.parts.map(p=>p.label)});
       const start=obs.parts.find(p=>p.selected)?.part_id,seen=new Map();
       const record=o=>{const id=o.parts.find(p=>p.selected)?.part_id||null;seen.set(id,{question:o.question,complete:o.completeness.complete,note:o.completeness.note,tableComplete:o.table_context_complete,slots:o.slots.filter(s=>(s.part_id||id)===id),tables:(o.tables||[]).map(t=>({...t,part_id:id}))})};
       record(await prepare(obs));

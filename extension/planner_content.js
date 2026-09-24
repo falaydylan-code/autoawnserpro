@@ -15,6 +15,11 @@
   // The one blank a page may leave that the model is allowed to fill: pick-one vs pick-many for a candidate
   // group. Held per container, applied only while the page text says nothing either way, dropped when refused.
   const assertedModes=new WeakMap();
+  // A control group the harness asked to treat as a part switcher, because the question's WORDING named more parts
+  // than the page declares with role=tab. Held per element, applied on every later observe, dropped when the group
+  // stops looking like one. The wording's count is the model's; which controls exist, and whether a click changed
+  // anything, is always the page's.
+  const assertedParts=new WeakSet();
   const choiceReceipts=new WeakMap();
   const resultIcon='svg[data-testid="icon-check"],svg[data-testid="icon-close-x"],[data-testid="AssemblyAnimatedIcon--CSS"][aria-label="check"]';
   const sensitive=/credit.?card|card.?number|cvv|cvc|social.?security|ssn|iban|routing|account.?number/i;
@@ -72,7 +77,7 @@
     const excluded=textExcluded+',aside,header,footer,nav,[role=toolbar],[role=tablist],[role=menu],[role=navigation],[role=banner],[role=contentinfo]';
     const auxiliary=/^(?:show|hide|toggle)?\s*(?:hint|bookmark|sound|audio|mute|settings|help|favorite|draw|start over|skip|report|share|flag)\b/i;
     // A link with a destination is navigation on every site (breadcrumbs, course lists), never an answer choice.
-    const pool=all(root,'button,[role=button],[aria-pressed],[tabindex]').filter(e=>shown(e)&&safe(e)&&!e.matches('input,textarea,select,td,th,[role=gridcell],[role=tab],svg,canvas,a[href]')&&!e.closest('a[href]')&&!known.some(k=>k===e||k.contains(e))&&!e.closest(excluded)&&!forbidden.test(name(e))&&!navigationKind(name(e))&&!auxiliary.test(name(e))&&(e.tabIndex>=0||e.hasAttribute('aria-pressed')));
+    const pool=all(root,'button,[role=button],[aria-pressed],[tabindex]').filter(e=>shown(e)&&safe(e)&&!e.matches('input,textarea,select,td,th,[role=gridcell],[role=tab],svg,canvas,a[href]')&&!assertedParts.has(e)&&!e.closest('a[href]')&&!known.some(k=>k===e||k.contains(e))&&!e.closest(excluded)&&!forbidden.test(name(e))&&!navigationKind(name(e))&&!auxiliary.test(name(e))&&(e.tabIndex>=0||e.hasAttribute('aria-pressed')));
     const nodes=pool.slice(0,400);
     const leaves=nodes.filter(e=>!nodes.some(n=>n!==e&&e.contains(n))),byContainer=new Map();
     for(const e of leaves){
@@ -332,10 +337,19 @@
     // the question has several separately answered parts and only the selected one is visible. Each tab is reported
     // as a part; the runtime reveals the others by clicking them, one at a time, and observes each while it is visible.
     // Nothing hidden is read here. Tabs whose label is in the forbidden vocabulary are never parts.
-    const tabs=all(root,'[role=tab]').filter(t=>shown(t)&&!forbidden.test(name(t))&&!/^(?:next|continue|submit|check)\b/i.test(name(t)));
+    // Parts. A tab strip is the declared way a question says it has several separately answered parts. It is not the
+    // only way: a site may switch parts with a row of plain buttons ("1 2 3 4", "Required 2"). Those are never parts
+    // on sight -- they become parts only when the harness asserts them, and it only does that when the model's
+    // reading of the WORDING names more parts than the page declared. A switcher must also show WHICH part is
+    // current, the same rule the choice groups live by: no readback, no trust.
+    const partSelected=t=>t.getAttribute('aria-selected')==='true'||t.getAttribute('aria-pressed')==='true'||t.matches('.ui-tabs-active,.ui-state-active,.active,.selected,.current,[aria-current=true],[aria-current=step],[aria-current=page]');
+    const partLabel=/^(?:(?:part|required|step|transaction|tab|item|question)\s*)?#?\s*\d{1,2}\s*[.):]?$|^(?:part|required|step|transaction|tab|item)\s+[a-z0-9]{1,12}$/i;
+    const declaredTabs=all(root,'[role=tab]').filter(t=>shown(t)&&!forbidden.test(name(t))&&!/^(?:next|continue|submit|check)\b/i.test(name(t)));
+    const switchers=declaredTabs.length>=2?[]:all(root,'button,[role=button],input[type=button],[tabindex]').filter(e=>assertedParts.has(e)&&shown(e)&&safe(e));
+    const tabs=declaredTabs.length>=2?declaredTabs:(switchers.length>=2?switchers:[]);
     const partOf=new Map(),panels=[];
     const parts=tabs.length>=2?tabs.map((t,i)=>{const panel=t.getAttribute('aria-controls')?document.getElementById(t.getAttribute('aria-controls')):null;if(panel){panels.push(panel);partOf.set(panel,'part:'+key(t))}
-      return {part_id:'part:'+key(t),label:name(t)||norm(t.value)||('Part '+(i+1)),selected:t.getAttribute('aria-selected')==='true'||t.matches('.ui-tabs-active,.ui-state-active,.active,[aria-current=true]'),tab:t,disabled:!!t.disabled||t.getAttribute('aria-disabled')==='true'}}):[];
+      return {part_id:'part:'+key(t),label:name(t)||norm(t.value)||('Part '+(i+1)),selected:partSelected(t),tab:t,disabled:!!t.disabled||t.getAttribute('aria-disabled')==='true'}}):[];
     for(const panel of all(root,'[role=tabpanel]'))if(parts.length&&!panels.includes(panel))panels.push(panel);
     if(parts.length&&!parts.some(p=>p.selected)){const active=panels.find(shown);const owner=active?[...partOf.entries()].find(([pn])=>pn===active):null;if(owner)parts.find(p=>p.part_id===owner[1]).selected=true;}
     // Identity must not change when the student switches tabs, so the identity stem and structure ignore the tab
@@ -352,15 +366,32 @@
     // signature is the anchor. The exclusion touches identity only; the model still reads the visible tab's text
     // and controls. Declared panels are never widened.
     const positionSelector='[aria-current=step],[aria-current=page],.question-number';
+    // The BOX is the smallest thing below the question root that holds the tab strip and a real answer control --
+    // the thing a tab click swaps. It is found whenever there are parts, because it serves two jobs: it is the
+    // identity widget (only under the anchor rules below, and only when the page declares no panel), and it is
+    // always the fingerprint of "what this part is showing". Ch.3 Q1 (9:32 PM) needed the second job: the page
+    // declares role=tabpanel elements that no tab claims, so there was no panel to fingerprint and no widget
+    // either, and the settle check that guards against recording one tab's answers under another ran blind.
+    const partBox=(()=>{if(!parts.length)return {box:null,reason:''};
+      const strips=new Set(parts.map(p=>p.tab.closest('[role=tablist]')||p.tab.parentElement));
+      if(strips.size!==1)return {box:null,reason:'more than one tab group'};
+      const answerControl=e=>!e.matches('[role=tab],input[type=button],input[type=submit],input[type=reset]')&&!parts.some(p=>p.tab.contains(e));
+      let n=[...strips][0];while(n&&n!==root&&!elements.some(e=>answerControl(e)&&n.contains(e)))n=n.parentElement;
+      if(n&&n!==root&&root.contains(n))return {box:n,reason:''};
+      // The switcher and the part's content can be siblings straight under the question root, with no box around
+      // both (a row of buttons above a table). Then the part's content region is what holds the ANSWER controls and
+      // not the switcher -- otherwise the changing text would sit in the identity and the first switch would read
+      // as a different question.
+      const answers=elements.filter(answerControl),clear=e=>e&&e!==root&&root.contains(e)&&![...strips].some(s=>e.contains(s));
+      let c=answers[0]||null;while(c&&!answers.every(e=>c.contains(e)))c=c.parentElement;          // the smallest box holding every answer
+      while(clear(c?.parentElement))c=c.parentElement;                                              // widen while it still leaves the switcher out
+      if(clear(c)&&!answers.includes(c))return {box:c,reason:''};
+      return {box:null,reason:'no box below the question root holds both the tabs and an answer control'};})();
     let widget=null,widgetReason='';
     if(parts.length&&!panels.length){
-      const strips=new Set(parts.map(p=>p.tab.closest('[role=tablist]')||p.tab.parentElement));
-      const answerControl=e=>!e.matches('[role=tab],input[type=button],input[type=submit],input[type=reset]')&&!parts.some(p=>p.tab.contains(e));
-      if(strips.size!==1)widgetReason='more than one tab group';
-      else{let n=[...strips][0];while(n&&n!==root&&!elements.some(e=>answerControl(e)&&n.contains(e)))n=n.parentElement;
-        if(!n||n===root||!root.contains(n))widgetReason='no box below the question root holds both the tabs and an answer control';
-        else{const outside=renderedText(root,new Set([...excluded,n])).text;
-          if(outside.length<40)widgetReason='fewer than 40 characters of question text outside the tab widget';else widget=n;}}
+      if(!partBox.box)widgetReason=partBox.reason;
+      else{const outside=renderedText(root,new Set([...excluded,partBox.box])).text;
+        if(outside.length<40)widgetReason='fewer than 40 characters of question text outside the tab widget';else widget=partBox.box;}
     }
     const identityExcluded=new Set([...excluded,...panels,...(widget?[widget]:[])]);
     const stem=renderedText(root,excluded),identityStem=parts.length?renderedText(root,identityExcluded):stem;
@@ -384,7 +415,7 @@
       : location.pathname+'|'+location.hash+'|'+position+'|'+structure+'|'+identityStem.text+(tabSignature?'|tabs:'+tabSignature:''));
     // The ingredients, hashed, so the runtime can say WHICH one moved when the key does; part_content is the visible
     // part's own text and controls (the settling signal for a tab switch), busy is the widget's aria-busy.
-    const partRoot=parts.length?([...partOf].find(([,id])=>id===(parts.find(p=>p.selected)?.part_id))?.[0]||widget||null):null;
+    const partRoot=parts.length?([...partOf].find(([,id])=>id===(parts.find(p=>p.selected)?.part_id))?.[0]||widget||partBox.box||null):null;
     const identity={stem:hash(identityStem.text),structure:hash(structure),position,tabs:tabSignature,panels:panels.length,inferred_widget:!!widget,...(widgetReason?{no_inference:widgetReason}:{}),
       part_content:partRoot?hash(renderedText(partRoot,excluded).text+'|'+elements.filter(e=>partRoot.contains(e)).map(e=>key(e)).join(',')):null,busy:!!partRoot?.querySelector('[aria-busy=true]')||partRoot?.getAttribute('aria-busy')==='true'};
     if(classificationQuestion!==question_key){classificationQuestion=question_key;confirmedSheetValues=new Set();}
@@ -442,7 +473,22 @@
     const observation_id=crypto.randomUUID();
     const tableContext=readTables(root,excluded);
     const partList=parts.map(p=>({part_id:p.part_id,label:p.label,selected:p.selected,disabled:p.disabled,target:target(p.tab)}));
-    last={observation_id,question_key,identity,document_id:doc,question:stem.text||norm(document.title),tables:tableContext.tables,table_context_complete:tableContext.complete,slots,menus,navigation,feedback,page_state,enumeration,parts:partList,
+    // A row of small numbered controls MIGHT be a part switcher. Reported as evidence, never acted on here: nothing
+    // in this list is a part until the harness asserts it, and it asserts only when the model's reading of the
+    // wording names more parts than the page declared. Two rules keep a wrong guess off a real page: the label must
+    // look like a part name (a number, or "Part 2" / "Required 3"), never a word the site uses for anything else;
+    // and the group must show which member is current -- a switcher the harness cannot read back is one it cannot
+    // drive, and a blind click on coursework is not worth the part it might reveal.
+    const candidate_parts=parts.length>=2?[]:(()=>{
+      const pool=all(root,'button,[role=button],input[type=button],[tabindex]').filter(e=>shown(e)&&safe(e)
+        &&!e.matches('a[href],[role=tab],input[type=submit],input[type=reset],textarea,select,'+answerCells)&&!e.closest('a[href]')&&!elements.includes(e)&&!e.closest(textExcluded)
+        &&!forbidden.test(name(e))&&!navigationKind(name(e)||norm(e.value)||'')&&partLabel.test(name(e)||norm(e.value)||''));
+      const groups=new Map();
+      for(const e of pool){const p=e.parentElement;if(!p)continue;if(!groups.has(p))groups.set(p,[]);groups.get(p).push(e)}
+      return [...groups.entries()]
+        .filter(([,members])=>members.length>=2&&members.length<=12&&members.some(partSelected)&&!elements.some(a=>members.some(m=>m.contains(a))))
+        .slice(0,3).map(([box,members])=>({group:key(box),members:members.map(e=>({target:target(e),label:name(e)||norm(e.value)||'',selected:partSelected(e)}))}));})();
+    last={observation_id,question_key,identity,document_id:doc,question:stem.text||norm(document.title),tables:tableContext.tables,table_context_complete:tableContext.complete,slots,menus,navigation,feedback,page_state,enumeration,parts:partList,candidate_parts,
       save_state:/\bsaved\b/i.test(feedback)?'confirmed':/\bsaving\b/i.test(feedback)?'pending':'unavailable',
       grade_state:/incorrect|wrong/i.test(feedback)?'incorrect':/partial/i.test(feedback)?'partial':/correct/i.test(feedback)?'correct':'unknown',
       discovery_complete:discovered.complete,completeness:{complete:!incomplete&&!limited,note:(incomplete||limited)?'QUESTION_INCOMPLETE: traversal or identity limit; inspect a smaller question.':''},targets,
@@ -464,6 +510,21 @@
       if(!c||c.disabled||s.choices.some(c=>last.targets.get(c.target)?.querySelector(resultIcon)))return fail('GUARD_REJECTED','Result-card entry needs a fresh, ungraded group and an exact offered choice.');
       const group=last.targets.get(s.target);choiceReceipts.set(group,{element:e,label:c.label,signature:s.discoverySignature});
       return {ok:true};
+    }
+    if(m.operation==='assert_parts'){
+      // The harness asks that a reported candidate group be treated as the question's part switcher, because the
+      // wording named more parts than the page declared. Applied through the same re-extraction everything else
+      // goes through: the group is marked, the question re-observed, and the result is whatever the page then says.
+      // If the marked group does not come back as this question's parts, the mark is dropped and nothing changed.
+      const group=(last.candidate_parts||[]).find(g=>g.group===m.group&&g.members.some(mm=>mm.target===m.target));
+      if(!group)return fail('TARGET_MISSING','That part-switcher candidate is not on this question.');
+      const members=group.members.map(mm=>last.targets.get(mm.target)).filter(Boolean);
+      if(members.length!==group.members.length)return fail('TARGET_STALE','Part-switcher candidates changed during inspection.');
+      for(const el of members)assertedParts.add(el);
+      const prior=last;observe();const fresh=last;last=prior;
+      const promoted=fresh.parts.length===members.length&&fresh.parts.every(p=>members.some(el=>fresh.targets.get(p.target)===el));
+      if(!promoted)for(const el of members)assertedParts.delete(el);
+      return {ok:true,promoted,parts:promoted?fresh.parts:[],reason:promoted?'':'the marked controls did not come back as this question\'s parts'};
     }
     if(m.operation==='classify_choices'){
       // Re-extract the group in the trusted inspector; model text is never classification authority -- with one

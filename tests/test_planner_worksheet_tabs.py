@@ -133,8 +133,11 @@ def test_without_question_text_outside_the_box_nothing_is_inferred_and_the_switc
     assert all(s['part_scope'] == 'fallback' for s in first['slots'])
     result = run(w, tid)
     assert result['status'] == 'needs_review'
-    stop = next(e for e in result['events'] if e['failure_code'] == 'TARGET_MISSING')
-    assert 'showed no answer controls the harness can tie to it' in stop['detail'] and 'fewer than 40 characters' in stop['detail'], stop['detail']
+    # 0.10.46: the stop is now the honest one. Ownership no longer depends on the scope label, so the tab IS
+    # accepted -- but with no anchor the widget cannot leave the identity, so the switch moves the question's own
+    # fingerprint and the run stops on that instead. Either way: one tab click, nothing entered, no guess.
+    stop = next(e for e in result['events'] if e['failure_code'] == 'TARGET_STALE')
+    assert 'Question identity changed' in stop['detail'] and 'stem' in stop['detail'], stop['detail']
     assert not any(e['detail'].startswith('Revealed part') for e in result['events'])                         # nothing recorded for the part
     assert [e['purpose'] for e in result['events'] if e['purpose']] == ['show_part']                         # one tab click, no answer input
     assert page.evaluate('window.values') == [{}, {}, {}]

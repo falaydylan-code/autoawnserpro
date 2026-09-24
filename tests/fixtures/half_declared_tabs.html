@@ -1,0 +1,42 @@
+<!doctype html><meta charset="utf-8"><title>Tabs that declare panels nobody claims</title>
+<style>body{font:16px sans-serif;margin:20px}main{max-width:900px}#tabs{list-style:none;display:flex;gap:6px;padding:0}
+.tab{border:1px solid #888;padding:6px 14px;cursor:pointer}.tab[aria-selected=true]{font-weight:bold;background:#eee}
+td,th{border:1px solid #888;padding:4px 8px}table{border-collapse:collapse}input{width:120px}</style>
+<!-- McGraw Connect Ch.3 Q1 as it stopped the run (2026-09-23 21:32): the tabs are <li role=tab id=tab-N> holding a
+     <span>, with NO aria-controls; the page separately renders a <div role=tabpanel> that no tab claims. The harness
+     therefore found panels (so it skipped inferring the box) but no tab OWNED one (so every cell was scoped
+     'fallback'), and showPart refused the selected tab for 5 s -> TARGET_MISSING. ?params:
+       noselect=1   no tab carries a selected marker at all
+       slow=<ms>    the table is rebuilt that long after the tab click -->
+<main>
+  <h2>Exercise 3-1 Cash versus accrual</h2>
+  <p id="stem"><strong>Required:</strong> Complete the schedule below for each basis of accounting. Enter the amounts
+  for March in the cells provided. Note: enter revenues before expenses on each basis.</p>
+  <ul id="tabs" role="tablist">
+    <li class="tab" id="tab-1" role="tab" aria-selected="true"><span>Cash Basis</span></li>
+    <li class="tab last-tab" id="tab-2" role="tab" aria-selected="false"><span>Accrual Basis</span></li>
+  </ul>
+  <div role="tabpanel" id="orphan-panel">
+    <div id="body"></div>
+  </div>
+</main>
+<script>
+const params=new URLSearchParams(location.search),slow=Number(params.get('slow')||0);
+const ROWS=[['0_table0_cell_c1_r4','Cash Sales'],['0_table0_cell_c1_r5','Customer Deposits']];
+const BASIS=['Cash Basis figures for March','Accrual Basis figures for March'];
+window.tabClicks=[];window.values=[{},{}];let selected=0;
+function render(i){
+  document.getElementById('body').innerHTML=`<p id="basis">${BASIS[i]}</p><table id="0_table0">`+
+    ROWS.map(([id,label])=>`<tr><th>${label}</th><td><input id="${id}" aria-label="${label}"></td></tr>`).join('')+`</table>`;
+  for(const [id] of ROWS){const e=document.getElementById(id);e.value=window.values[i][id]||'';e.oninput=()=>{window.values[i][id]=e.value}}
+}
+function show(i){
+  window.tabClicks.push(i+1);selected=i;
+  for(const [j,t] of [...document.querySelectorAll('[role=tab]')].entries())t.setAttribute('aria-selected',String(j===i));
+  document.getElementById('body').innerHTML='';
+  if(slow)setTimeout(()=>{if(selected===i)render(i)},slow);else render(i);
+}
+if(params.get('noselect'))for(const t of document.querySelectorAll('[role=tab]'))t.removeAttribute('aria-selected');
+for(const [i,t] of [...document.querySelectorAll('[role=tab]')].entries())t.onclick=()=>show(i);
+render(0);
+</script>

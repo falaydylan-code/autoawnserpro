@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Assignment Lab 2.0",
-  "version": "0.10.45",
+  "version": "0.10.46",
   "description": "Reads the assignment page you already have open and works through it one step at a time.",
   "minimum_chrome_version": "116",
   "permissions": [
