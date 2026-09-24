@@ -446,13 +446,13 @@ async def capabilities(protocol: int = 3):
     # falls back to the protocol-3 default rather than 422-ing the negotiation,
     # so the planner's `?protocol=4` request actually returns protocol 4.
     protocol = protocol if protocol in (3, 4) else 3
-    return {'protocol': protocol, 'extension': '0.10.45', 'supported_protocols': [3,4], 'request_wait_seconds': planner.REQUEST_DEADLINE_MAX,
+    return {'protocol': protocol, 'extension': '0.10.46', 'supported_protocols': [3,4], 'request_wait_seconds': planner.REQUEST_DEADLINE_MAX,
             'planner_release': 'preview', 'planner_output_tokens': planner.call_limits({}),
             'features': ['parts', 'ordering', 'visual_input', 'visual_verification', 'browser_input', 'page_states', 'no_step_ceiling',
-                         'task_plans', 'scoped_observations', 'stable_slots', 'typed_verification', 'bounded_repair', 'geometry_inspection', 'frame_scoped_inspection','interaction_classification','choice_discovery','bounded_format_correction']}
+                         'task_plans', 'scoped_observations', 'stable_slots', 'typed_verification', 'bounded_repair', 'geometry_inspection', 'frame_scoped_inspection','interaction_classification','choice_discovery','bounded_format_correction','contextual_navigation']}
 
 
-async def planner_endpoint(body, request, who, repair=False, visual=False, verify=False):
+async def planner_endpoint(body, request, who, repair=False, visual=False, verify=False, navigation=False):
     import math
     import json
     throttle(request, 'planner', per_ip=1500, per_global=9000, window=600,
@@ -469,6 +469,7 @@ async def planner_endpoint(body, request, who, repair=False, visual=False, verif
         # Images reserve the full model context: conservative, never a guessed fixed vision token rate.
         ntokens=len(json.dumps(observation,ensure_ascii=False).encode('utf-8'))+len(planner.PLANNER_PROMPT.encode())+len(planner.REPAIR_PROMPT.encode())+4096
         if repair:ntokens+=len(body.model_dump_json().encode('utf-8'))
+        if navigation:ntokens+=len(body.model_dump_json().encode('utf-8'))+len(planner.NAVIGATION_PROMPT.encode('utf-8'))
         if observation['screenshot']:
             ntokens=int(entry.get('context_length') or 0)
             if ntokens<=0:raise ValueError()
@@ -477,20 +478,22 @@ async def planner_endpoint(body, request, who, repair=False, visual=False, verif
         # Long-prompt tiers (`overrides`, e.g. Grok 4.6 doubles above 200k prompt tokens) apply when the reserved bound
         # crosses the tier; the image bound (full context) usually does, so the tier price is what gets reserved.
         inp,out,fee=planner.reservation_prices(pricing,ntokens)
-        amount=ntokens*inp+((2000 if visual or verify else planner.call_limits(observation,repair))+thinking)*out+fee
+        amount=ntokens*inp+((2000 if visual or verify or navigation else planner.call_limits(observation,repair))+thinking)*out+fee
         unknown=planner.unknown_charges(pricing)
         if unknown:raise HTTPException(400,f'BUDGET_EXHAUSTED: model pricing has a component this backend cannot reserve ({", ".join(unknown)}); select another model.')
     except (ValueError,KeyError,TypeError):
         raise HTTPException(400,'BUDGET_EXHAUSTED: model pricing cannot be safely reserved; select a model with known token pricing.') from None
     record={};owner_key=who
-    output_format=None if planner.thinking_replaces_schema(entry,reasoning) else planner.response_format(entry.get('supported_parameters',[]),planner.VerifyResponse if verify else planner.VisualGraph if visual else planner.PlannerResponse,observation)
+    output_format=None if planner.thinking_replaces_schema(entry,reasoning) else planner.response_format(entry.get('supported_parameters',[]),planner.NavigationResponse if navigation else planner.VerifyResponse if verify else planner.VisualGraph if visual else planner.PlannerResponse,observation)
     if output_format and not observation['screenshot']:amount+=len(json.dumps(output_format).encode('utf-8'))*inp
     record['output_format']=output_format['type'] if output_format else 'prompt_json';record['reasoning']=reasoning
     async def transport(messages,max_tokens):
         return await agent.planner_complete(owner_key,messages,selected,record,max_tokens+thinking,
-            dict(run_id=body.run_id,request_id=body.request_id,question=observation['question_key'],phase='verify' if verify else 'visual' if visual else 'format_correction' if body.format_correction else 'inspection_correction' if body.inspection_target_correction else 'repair' if repair else 'plan',cap=body.spend_limit,amount=amount,budget_owner=budget_key(who,request)),price_limit={'prompt':inp*1e6,'completion':out*1e6,'request':fee,'image':0,'audio':0},output_format=output_format,reasoning=reasoning,avoid_providers=body.avoid_providers,deadline=planner.request_deadline(max_tokens+thinking))
+            dict(run_id=body.run_id,request_id=body.request_id,question=observation['question_key'],phase='navigation' if navigation else 'verify' if verify else 'visual' if visual else 'format_correction' if body.format_correction else 'inspection_correction' if body.inspection_target_correction else 'repair' if repair else 'plan',cap=body.spend_limit,amount=amount,budget_owner=budget_key(who,request)),price_limit={'prompt':inp*1e6,'completion':out*1e6,'request':fee,'image':0,'audio':0},output_format=output_format,reasoning=reasoning,avoid_providers=body.avoid_providers,deadline=planner.request_deadline(max_tokens+thinking))
     try:
-        if verify:
+        if navigation:
+            answer=await planner.request_navigation(body,transport)
+        elif verify:
             answer=await planner.request_verify(body,transport)
         elif visual:
             answer=await planner.request_visual(body,transport)
@@ -502,7 +505,7 @@ async def planner_endpoint(body, request, who, repair=False, visual=False, verif
         correction={'inspection_correction':exc.correction} if isinstance(exc,planner.InspectionTargetError) else {}
         if isinstance(exc,planner.InvalidJsonError):correction['format_correction']={'kind':'invalid_json'}
         return JSONResponse(status_code=400,content={'detail':str(exc),**record,**correction})
-    return {'response':answer.model_dump(),'phase':'verify' if verify else 'visual' if visual else 'repair' if repair else 'plan','reservation':amount,**record}
+    return {'response':answer.model_dump(),'phase':'navigation' if navigation else 'verify' if verify else 'visual' if visual else 'repair' if repair else 'plan','reservation':amount,**record}
 
 
 @app.get('/api/agent/runs/{run_id}')
@@ -520,6 +523,11 @@ async def agent_visual(body: planner.VisualRequest, request: Request, who=Depend
 @app.post('/api/agent/verify')
 async def agent_verify(body: planner.VerifyRequest, request: Request, who=Depends(owner)):
     return await planner_endpoint(body,request,who,verify=True)
+
+
+@app.post('/api/agent/navigation')
+async def agent_navigation(body: planner.NavigationRequest, request: Request, who=Depends(owner)):
+    return await planner_endpoint(body,request,who,navigation=True)
 
 
 @app.post('/api/agent/plan')

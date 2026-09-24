@@ -175,7 +175,7 @@
         completeness:{complete:fullQuestionText.length<=60000&&slots.length<=100&&frames.every(f=>f.completeness.complete),note:(fullQuestionText.length>60000?'Question context exceeds 60000 characters; missing context must be recovered. ':'')+(slots.length>100?'More than 100 answer slots; narrow the question scope. ':'')+frames.map(f=>f.completeness.note).filter(Boolean).join('; ')},
         enumeration:frames.find(f=>f.enumeration)?.enumeration||null,
         page_state:frames.find(f=>f.page_state!=='answering')?.page_state||'answering',host:frames[0].host,
-        navigation:frames.flatMap(f=>f.navigation.map(n=>({...n,frame:f}))),feedback:frames.map(f=>f.feedback).filter(Boolean).join('; '),
+        navigation:frames.flatMap(f=>f.navigation.map(n=>({...n,frame:f}))),navigation_complete:frames.every(f=>f.navigation_complete!==false)&&frames.reduce((sum,f)=>sum+f.navigation.length,0)<=60,feedback:frames.map(f=>f.feedback).filter(Boolean).join('; '),
         grade_state:frames.find(f=>f.grade_state!=='unknown')?.grade_state||'unknown',save_state:frames.some(f=>f.save_state==='pending')?'pending':frames.some(f=>f.save_state==='confirmed')?'confirmed':'unavailable',visual:frames.some(f=>f.visual)};
       if(new Set(slots.map(s=>s.slot_key)).size!==slots.length)throw new Fault('TARGET_AMBIGUOUS','Duplicate logical slots.');
       return obs;
@@ -279,6 +279,67 @@
     }
     async key(key){await this.guard();return AssignmentVisual.key(this.tabId,key,()=>this.cancelled||this.b.stopped())}
     async modelCall(phase,body){const start=Date.now();try{return await this.b.request(phase,body,this.abort.signal)}finally{this.current?.recovery?.exclude(Date.now()-start)}}
+    navigationState(obs){this.ledger.navigation||={};return this.ledger.navigation[obs.question_key]||=( {calls:0,attempts:{}} );}
+    navigationCandidate(n){return {candidate_id:n.frame.frame_id+':'+n.target,label:n.label,context:n.context||'',group:n.frame.frame_id+':'+(n.group||n.target),
+      kind:n.kind,allowed_actions:n.allowed_actions||[n.kind],disabled:!!n.disabled,confidence:!!n.confidence};}
+    navigationStamp(n){return JSON.stringify(this.navigationCandidate(n));}
+    async resolveNavigation(obs,actions){
+      if(obs.navigation_complete===false)throw new Fault('QUESTION_INCOMPLETE','Navigation candidates exceeded the observation limit; no action selected.');
+      const offered=obs.navigation.filter(n=>!n.disabled&&(n.allowed_actions||[n.kind]).some(a=>actions.includes(a)));
+      await this.event('NAVIGATE','Inspecting workflow controls',{requested_actions:actions,candidates:offered.map(n=>this.navigationCandidate(n))});
+      if(!offered.length)return null;
+      const clear=offered.filter(n=>actions.includes(n.kind)&&!n.confidence);
+      if(clear.length===1)return {obs,candidate:clear[0],action:clear[0].kind,reason:'Recognized workflow action from the visible label and local context.'};
+      const memory=this.navigationState(obs);
+      if(memory.calls>=2)throw new Fault('BUDGET_EXHAUSTED','Two navigation decisions were already requested for this question; review the remaining controls.');
+      const config=await this.b.config(),generation=this.generation;
+      const permissions={check:!!config.check_work,advance:!!config.advance,submit:false};
+      const observation={question_key:obs.question_key,document_id:obs.document_id,observation_id:obs.observation_id,
+        question:'Interpret workflow controls only.',slots:[],completeness:{complete:true,note:''},host:obs.host};
+      const body={run_id:this.id,request_id:crypto.randomUUID(),spend_limit:config.spend_limit,model:config.model,observation,
+        candidates:offered.map(n=>this.navigationCandidate(n)),requested_actions:actions,permissions,
+        answer_reason:String(this.current?.plan?.reason||'').slice(0,4000)};
+      memory.calls++;this.ledger.pending_request=body.request_id;await this.persist();
+      await this.event('NAVIGATE','Asking the model to interpret workflow controls',{request_id:body.request_id,candidates:body.candidates,requested_actions:actions,permissions});
+      const data=await this.modelCall('navigation',body);
+      if(Number.isFinite(data.cost)){this.ledger.cost+=data.cost;this.ledger.pending_request=null;}
+      await this.persist();await this.guard();
+      await this.event('NAVIGATE',data.response?'Received navigation decision':'Navigation decision rejected',{
+        model_calls:1,cost:data.cost,request_id:body.request_id,input_tokens:data.input_tokens,output_tokens:data.output_tokens,reasoning_tokens:data.reasoning_tokens,
+        model:data.model||body.model,provider:data.provider,raw:data.raw_reply,response_kind:data.response?.kind,detail:data.response?.reason||data.detail});
+      if(this.ledger.pending_request)throw new Fault('BUDGET_EXHAUSTED','Navigation request cost is uncertain; reconcile before continuing.');
+      if(generation!==this.generation)throw new Fault('CANCELLED','Discarded late navigation decision.');
+      if(!data.response)throw new Fault('GUARD_REJECTED',data.detail||'No valid navigation response; nothing clicked.');
+      const r=data.response;
+      if(r.question_key!==obs.question_key||r.observation_id!==obs.observation_id)throw new Fault('TARGET_STALE','Navigation evidence IDs changed.');
+      const fresh=await this.observe();
+      if(fresh.question_key!==obs.question_key||fresh.document_id!==obs.document_id)throw new Fault('TARGET_STALE','Question changed while interpreting workflow controls.');
+      if(!['action','none','needs_review'].includes(r.kind)||typeof r.reason!=='string'||!r.reason)throw new Fault('GUARD_REJECTED','Invalid navigation response.');
+      if(r.kind!=='action'){
+        if(r.candidate_id||r.action)throw new Fault('GUARD_REJECTED','A non-action response named a control.');
+        if(r.kind==='needs_review')throw new Fault('TARGET_AMBIGUOUS',r.reason);
+        await this.event('NAVIGATE','No candidate serves the requested workflow action',{reason:r.reason});
+        return null;
+      }
+      const chosen=offered.find(n=>this.navigationCandidate(n).candidate_id===r.candidate_id);
+      const permitted={check:permissions.check,answer_submit:permissions.check,advance:permissions.advance,submit:false};
+      if(!chosen||!actions.includes(r.action)||!(chosen.allowed_actions||[chosen.kind]).includes(r.action)||!permitted[r.action]||
+        (chosen.kind!=='unknown'&&chosen.kind!==r.action)||(chosen.confidence&&r.action!=='answer_submit'))throw new Fault('GUARD_REJECTED','Navigation response selected an unoffered or unauthorized action.');
+      const live=fresh.navigation.find(n=>this.navigationCandidate(n).candidate_id===r.candidate_id);
+      if(!live||live.disabled||this.navigationStamp(live)!==this.navigationStamp(chosen))throw new Fault('TARGET_STALE','Workflow control changed while the model was deciding.');
+      return {obs:fresh,candidate:live,action:r.action,reason:r.reason};
+    }
+    async freshNavigation(decision){
+      await this.guard();const fresh=await this.observe(),original=decision.obs;
+      if(fresh.question_key!==original.question_key||fresh.document_id!==original.document_id)throw new Fault('TARGET_STALE','Workflow page changed before clicking.');
+      const chosen=decision.candidate,id=this.navigationCandidate(chosen).candidate_id;
+      const live=fresh.navigation.find(n=>this.navigationCandidate(n).candidate_id===id);
+      if(!live||live.disabled||this.navigationStamp(live)!==this.navigationStamp(chosen))throw new Fault('TARGET_STALE','Workflow control changed before clicking.');
+      this.config=await this.b.config();
+      const allowed={check:this.config.check_work,answer_submit:this.config.check_work,advance:this.config.advance,submit:this.config.auto_submit};
+      if(!allowed[decision.action])throw new Fault('GUARD_REJECTED','The setting for this workflow action is disabled.');
+      return {...decision,obs:fresh,candidate:live};
+    }
     // Visual readback for choice groups with no DOM selected-state (Quizlet's cards, any styled tile): the clicked
     // member's own pixels before vs after, with the pointer parked off the group so hover styling cannot pass for a
     // selection, plus the page's own counter when it shows one. What was confirmed is remembered in
@@ -776,6 +837,11 @@
       this.current=saved||{key:obs.question_key,document:obs.document_id,completed:{},recovery:new Recovery(),plan:null};
       this.current.recovery=new Recovery(this.current.recovery);this.current.document=obs.document_id;this.current.identity=obs.identity;this.current.frameDocuments=obs.frames.map(f=>({frame_id:f.frame_id,document_id:f.document_id}));this.current.enumeration=obs.enumeration;this.ledger.questions[obs.question_key]=this.current;
       await this.event('OBSERVE','Reading question');
+      // A submission click is persisted as pending before the browser input. If a
+      // run is resumed while the page still shows the old question, stop before
+      // re-entering the answer or reaching the navigation branch again.
+      const pendingPlan=this.current.plan&&this.navigationState(obs).attempts[hash(JSON.stringify(this.current.plan))];
+      if(pendingPlan?.status==='pending')throw new Fault('REPEATED_STATE','A prior answer submission has an uncertain outcome. It will not be clicked again.');
       if(obs.discovery_complete===false)throw new Fault('QUESTION_INCOMPLETE','Too many unfamiliar answer candidates to establish coverage; no paid request was made.');
       if(!obs.completeness.complete&&/exceeds? \d+|More than \d+|traversal or identity limit/i.test(obs.completeness.note))throw new Fault('QUESTION_INCOMPLETE',obs.completeness.note+' This extraction limit cannot be repaired by repeating a model request.');
       if(!obs.completeness.complete)await this.event('INSPECT','Question extraction is incomplete; only bounded inspection is allowed',{missing:obs.completeness.note});
@@ -990,7 +1056,10 @@
       return obs;
     }
     async run(){if(this.busy)throw new Fault('GUARD_REJECTED','One operation is already running.');this.busy=true;this.ledger.status='running';await this.persist();
-      try{if(this.ledger.pending_request)throw new Fault('BUDGET_EXHAUSTED','Prior request cost is uncertain; reconcile before resuming.');let navigationStates=new Set();
+      try{
+        if(this.ledger.pending_request)throw new Fault('BUDGET_EXHAUSTED','Prior request cost is uncertain; reconcile before resuming.');
+        if(this.ledger.pending_navigation)throw new Fault('REPEATED_STATE','A prior answer submission has an uncertain outcome. It will not be clicked again.');
+        let navigationStates=new Set();
         while(true){this.current=null;let obs=await this.observe();if(obs.page_state==='complete'){await this.event('FINISH','Page reports assignment complete.',{grade_state:obs.grade_state,save_state:obs.save_state});this.ledger.status='completed';break}
           if(obs.page_state!=='locked')await this.runQuestion(obs);else await this.event('FINISH','Attempt is graded and locked; answer entry is retired.',{grade_state:obs.grade_state,save_state:obs.save_state});
           // After a finished answer nothing more goes into the old page, so a document the page replaced on its own
@@ -1004,27 +1073,54 @@
             if(!this.config.advance){this.ledger.status='finished';break}
             await this.event('ADVANCE','The page advanced after the verified answer; observing the new question.');continue;
           }
+          if(this.current?.finished&&this.navigationState(obs).attempts[hash(JSON.stringify(this.current.plan))]?.status==='pending')
+            throw new Fault('REPEATED_STATE','A prior answer submission has an uncertain outcome. It will not be clicked again.');
           if(this.config.check_work&&this.current?.finished&&obs.page_state==='answering'){
-            const checks=obs.navigation.filter(n=>n.kind==='check'&&!n.disabled),signature=hash(JSON.stringify(this.current.plan));this.current.checks||=[];
-            if(checks.length===1&&!this.current.checks.includes(signature)){
-              this.current.checks.push(signature);await this.persist();await this.event('VERIFY','Checking work once for this answer plan.');await this.click(checks[0].frame,checks[0].target,{purpose:'check_work',executor_reason:'Check work is authorized and this answer plan has not been checked yet.',navigation_label:checks[0].label});
+            const signature=hash(JSON.stringify(this.current.plan)),memory=this.navigationState(obs);this.current.checks||=[];
+            if(memory.attempts[signature]?.status==='pending')throw new Fault('REPEATED_STATE','A prior answer submission has an uncertain outcome. It will not be clicked again.');
+            if(!this.current.checks.includes(signature)){
+              let decision=await this.resolveNavigation(obs,['check','answer_submit']);
+              if(decision){
+              await this.reconcile();decision=await this.freshNavigation(decision);obs=decision.obs;
+              const selected=decision.candidate,action=decision.action;
+              memory.attempts[signature]={status:'pending',action,candidate:this.navigationCandidate(selected).candidate_id};
+              this.ledger.pending_navigation={question_key:this.current.key,signature,action,candidate:this.navigationCandidate(selected).candidate_id};
+              this.current.checks.push(signature);await this.persist();
+              await this.event('VERIFY',action==='check'?'Checking work once for this answer plan.':'Submitting this answer once.',{
+                navigation_label:selected.label,reason:decision.reason,confidence_rating:selected.confidence?selected.label:undefined});
+              await this.click(selected.frame,selected.target,{purpose:action==='check'?'check_work':'submit_answer',executor_reason:decision.reason,navigation_label:selected.label});
               // A page answers a Check by redrawing, by reloading its question frame (McGraw, Ch.1 Q1 8:39 PM), or by
               // moving on. All three are the click doing its job. The graded page is accepted only as the SAME question:
               // a different key is named and stops the run rather than guessed at.
               // Settled = the page responded (feedback, state, key or document moved) AND it is readable again (answer
               // controls back, or locked/complete): a reloaded frame that shows its stem before its inputs is not the
               // graded page yet. A frame the site re-created rather than reloaded then shows up as a key change (frames).
-              const settled=await this.settle('check_work',obs,(fresh,before)=>(fresh.feedback!==before.feedback||fresh.page_state!==before.page_state||fresh.question_key!==before.question_key||fresh.document_id!==before.document_id)&&(fresh.slots.length>0||fresh.page_state!=='answering'));
+              const settled=await this.settle(action,obs,(fresh,before)=>(fresh.feedback!==before.feedback||fresh.page_state!==before.page_state||fresh.question_key!==before.question_key||fresh.document_id!==before.document_id||
+                (action==='answer_submit'&&fresh.navigation.some(n=>n.kind==='advance'&&!n.disabled&&!before.navigation.some(p=>p.kind==='advance'&&!p.disabled))))&&(fresh.slots.length>0||fresh.page_state!=='answering'));
               if(!settled.settled)throw new Fault('INPUT_NO_EFFECT',settled.replaced?`Check replaced the page's document but it did not settle within ${LIMITS.navigation/1000} s. It will not be repeated.`:'Check produced no new feedback. It will not be repeated.');
               obs=settled.obs;
-              if(obs.question_key!==this.current.key)throw new Fault('TARGET_STALE',`Question identity changed after Check (${identityMovers(this.current.identity,obs.identity)}); the graded page was not entered.`,{identity:{was:this.current.identity||null,now:obs.identity||null},document_replaced:settled.replaced});
+              if(obs.question_key!==this.current.key){
+                if(action!=='answer_submit')throw new Fault('TARGET_STALE',`Question identity changed after Check (${identityMovers(this.current.identity,obs.identity)}); the graded page was not entered.`,{identity:{was:this.current.identity||null,now:obs.identity||null},document_replaced:settled.replaced});
+                // Only an explicit current-answer submission may auto-advance. A changed feedback/review page is
+                // not a new unanswered question and must not feed a revealed key into another answer plan.
+                if(obs.page_state!=='complete'&&(!obs.slots.length||obs.feedback||obs.grade_state!=='unknown'||obs.slots.some(s=>s.result_feedback)))throw new Fault('TARGET_STALE','Answer submission changed the page, but a new unanswered question could not be established.');
+                memory.attempts[signature].status='confirmed';this.ledger.pending_navigation=null;await this.persist();
+                await this.event('ADVANCE','The website advanced after submitting this answer.',{navigation_label:selected.label});
+                this.config=await this.b.config();
+                if(!this.config.advance){this.ledger.status='finished';break;}
+                continue;
+              }
+              memory.attempts[signature].status='confirmed';this.ledger.pending_navigation=null;await this.persist();
               if(settled.replaced)this.repin(obs);
               await this.event('VERIFY','Website feedback received',{grade_state:obs.grade_state,save_state:obs.save_state,...(settled.replaced?{document_replaced:true}:{})});
               if(obs.grade_state==='incorrect'&&obs.page_state!=='locked')throw new Fault('VALUE_MISMATCH','Website graded this attempt incorrect and permits editing. Review feedback before another attempt.');
+              }
             }
           }
+          if(!this.config.check_work&&obs.navigation.some(n=>!n.disabled&&['check','answer_submit'].includes(n.kind)))await this.event('NAVIGATE','Answer checking/submission controls are present, but Check work is off. No answer was submitted.');
           if(!this.config.advance){this.ledger.status='finished';break}
-          const next=obs.navigation.filter(n=>n.kind==='advance'&&!n.disabled);
+          const nextDecision=await this.resolveNavigation(obs,['advance']);
+          const next=nextDecision?[nextDecision.candidate]:[];
           if(next.length!==1){
             if(this.config.auto_submit&&obs.navigation.some(n=>n.kind==='submit')){
               const questions=Object.values(this.ledger.questions),total=obs.enumeration?.total,indices=new Set(questions.filter(q=>q.finished&&q.enumeration&&q.enumeration.total===total).map(q=>q.enumeration.index));
@@ -1038,7 +1134,11 @@
             }
             if(next.length>1)throw new Fault('TARGET_AMBIGUOUS','More than one Next control.');this.ledger.status='finished';await this.event('FINISH','Observed question complete. No unique next-question control found.');break;
           }
-          const signature=obs.question_key+':'+next[0].target;if(navigationStates.has(signature))throw new Fault('REPEATED_STATE','Navigation returned to the same question.');navigationStates.add(signature);
+          const checkedNext=await this.freshNavigation(nextDecision);obs=checkedNext.obs;next[0]=checkedNext.candidate;
+          const signature=obs.question_key+':'+next[0].frame.frame_id+':'+next[0].target;
+          this.ledger.navigationSent||=[];
+          if(navigationStates.has(signature)||this.ledger.navigationSent.includes(signature))throw new Fault('REPEATED_STATE','Navigation was already attempted for this question. Review the result before another click.');
+          navigationStates.add(signature);this.ledger.navigationSent.push(signature);await this.persist();
           await this.event('ADVANCE','Moving to the next question');await this.click(next[0].frame,next[0].target,{purpose:'advance',executor_reason:'Automatic continuation is enabled and the current attempt is complete or locked.',navigation_label:next[0].label});
           // Next may swap the question in place or reload the frame that holds it; either way the loop starts over on
           // whatever question is there now (this.current is dropped at the top), so no pin needs restoring here.

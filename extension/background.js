@@ -81,7 +81,7 @@ async function runPlanner(tabId,config,resume=false){
     const tab=await chrome.tabs.get(tabId);runOrigin=new URL(tab.url).origin;runSite=siteOf(tab.url);runUrl=tab.url;runTitle=tab.title;runToken='';
     const response=await fetch(config.backend+'/api/capabilities?protocol=4',{signal:decisionAbort.signal});const caps=await response.json();
     requestWaitMs=(Number(caps.request_wait_seconds)||60)*1000+15000;
-    if(caps.protocol!==4||!['task_plans','stable_slots','typed_verification','bounded_repair','frame_scoped_inspection','interaction_classification','choice_discovery','bounded_format_correction'].every(f=>caps.features?.includes(f)))throw new Error('Backend update required: structured planner needs protocol 4 with choice discovery and bounded format correction. No paid request was made.');
+    if(caps.protocol!==4||!['task_plans','stable_slots','typed_verification','bounded_repair','frame_scoped_inspection','interaction_classification','choice_discovery','bounded_format_correction','contextual_navigation'].every(f=>caps.features?.includes(f)))throw new Error('Backend update required: structured planner needs protocol 4 with contextual navigation. No paid request was made.');
     await boundTab(tabId);await AssignmentVisual.attach(tabId);
     const held=(await chrome.storage.local.get('planner_run')).planner_run;
     if(resume&&(!held||held.tab_id!==tabId||held.url!==tab.url))throw new Error('Cannot resume: select the original assignment tab and URL.');

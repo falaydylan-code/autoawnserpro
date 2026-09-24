@@ -1,5 +1,15 @@
 # Handoff log
 
+## 2026-09-23 - codex - contextual navigation build
+
+**Did:** Built the user-approved generic workflow-navigation fix on branch codex/contextual-navigation in C:/Users/falay/orca/workspaces/assignment-agent-question-coverage/codex-contextual-navigation. Added bounded contextual candidates and confidence-aware answer submission in extension/planner_content.js, strict metered navigation contracts and /api/agent/navigation in planner.py, app.py, and store.py, runtime candidate revalidation and action-specific transitions in extension/planner_runtime.js, the 0.10.46 capability/version bump, fixtures, tests, and architecture documentation. Added a durable pending-navigation record before an answer submission click so resume cannot repeat an uncertain click after a DOM redraw.
+
+**Verified:** node --check passed for extension/planner_content.js and extension/planner_runtime.js. tests/test_navigation_contract.py plus tests/test_planner_navigation.py passed 30 tests. The duplicate-submission resume case passed alone after the durable guard. The earlier service-worker startup failure reran alone and passed. The transition/acceptance/executor regression command was still running when this handoff was written.
+
+**Left undone:** Collect the running regression result; run any necessary final focused tests; update the shared vault state/log and export the session. No commit, merge, push, deployment, or live Quizlet/McGraw verification was done. Full suite was deferred because free memory was about 1.11 GB and the project requires at least 4 GB.
+
+**Watch out:** A pending navigation outcome deliberately stops the resumed run rather than risking a duplicate answer submission. Unknown, ambiguous, overflow, unlabeled, or unsafe workflow controls still stop for review. The missing Quizlet question stem in the old DOM observation is a separate unresolved issue. Kimchi is the integrator; if shipping is later authorized, deploy backend before extension.
+
 ## 2026-09-21 - claude (kimchi, integrator) - 0.10.45 merged and deployed: tab anchor + harness-caused transitions
 
 **Did:** Fast-forwarded codex/optional-numbering dfaadcd -> af38808 = claude/tab-anchor bcfef4f (kimchi: position marker optional, tab signature = visible text) + merge of claude/expected-transitions 4a12a42 (Mira: guard() pins lifted only inside settle() for Check/Next/Submit and the post-answer look, repin() on the same question, visual.js begin() clears `cancelled`). Integrator review of Mira's runtime diff: `identityMovers` exists (:48), `this.current.key` is the key same() uses, node --check clean on runtime/content/visual; only HANDOFF.md conflicted at merge (both entries kept). Deployed backend from deploy-source (only app.py differed: the version line; frontend identical; local capabilities 0.10.45); `railway up` complete; live `/api/capabilities?protocol=4` reported 0.10.45 on the first poll, `/api/health` ok. Dylan reloads the extension himself.
