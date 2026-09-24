@@ -22,6 +22,9 @@
   const assertedParts=new WeakSet();
   const choiceReceipts=new WeakMap();
   const resultIcon='svg[data-testid="icon-check"],svg[data-testid="icon-close-x"],[data-testid="AssemblyAnimatedIcon--CSS"][aria-label="check"]';
+  // Labels that are page workflow, never an answer. Hoisted out of navigationInfo so the navigation path and the
+  // whole-group chrome test in discoverChoices read the SAME vocabulary instead of keeping two that drift apart.
+  const chromeLabel=/^(?:previous|back|cancel|clear|reset|skip|hint|help|reading|read about|review|listen|play|audio|share|report|flag|settings|close)\b/i;
   const sensitive=/credit.?card|card.?number|cvv|cvc|social.?security|ssn|iban|routing|account.?number/i;
   const forbidden=/^(?:delete|remove|discard|reset|sign\s*(?:in|out)|log\s*(?:in|out)|register|accept|agree|allow|consent|download|export|purchase|buy|pay|checkout)\b/i;
   // One vocabulary owns both navigation discovery and exclusion from answers.
@@ -34,7 +37,7 @@
   // Only local action-area text, not answer/feedback contents, accompanies a navigation candidate.
   function navigationInfo(e){
     const label=norm(name(e)||e.value||e.querySelector('title')?.textContent||'').slice(0,300);
-    if(!label||forbidden.test(label)||/^(?:previous|back|cancel|clear|reset|skip|hint|help|reading|read about|review|listen|play|audio|share|report|flag|settings|close)\b/i.test(label))return null;
+    if(!label||forbidden.test(label)||chromeLabel.test(label))return null;
     if(e.closest('[role=tablist],[role=menu],header,[role=banner]')||e.matches('[role=tab],[role=radio],[role=checkbox],[aria-pressed]'))return null;
     let context='',group=e.parentElement;
     for(let p=e.parentElement,depth=0;p&&depth<3;p=p.parentElement,depth++){
@@ -150,6 +153,49 @@
       const reason=!unique?'Answer labels are missing or repeated.':!mode?'Single or multiple selection is not established by the visible instructions.':'';
       return {container,members,labels,mode,modeSource,attribute,resultCards,verification,counter,signature,reason,scope:text,ready:!reason};
     });
+    // Two whole-group verdicts, applied after the groups are built. Both MARK the group rather than dropping it:
+    // its members still count as candidates, so their text stays out of the question stem either way, but no answer
+    // slot is offered for them.
+    //
+    // 1. A per-option TOOL row mirrors the answers. Formative puts a second button beside every option
+    //    ("Strikethrough this option -- Frictional unemployment"): four repeated siblings with unique labels and a
+    //    readable mode, so it was offered as a second answer group and the backend then required a plan for it --
+    //    the model was being asked to cross out its own correct answer (2026-09-24 1:00 AM, macroecon quiz 1). The
+    //    test is structural and carries no vocabulary: strip the phrase every label in the group shares, and if what
+    //    is left maps one for one onto another group's labels AS THAT GROUP WRITES THEM, this group is a tool for
+    //    that group. The target must match literally, so two tool rows cannot cancel each other out, and a group
+    //    that shares no phrase with itself is never a tool. "Eliminate A / Eliminate B" with nothing to mirror stays
+    //    an answer group. Prefix and suffix are tried separately because a real option set often shares a tail too
+    //    ("Seasonal/Cyclical/Frictional/Structural unemployment"), and stripping both would mirror nothing.
+    const residuals=labels=>{const first=labels[0];let p=0,q=0;
+      while(p<first.length&&labels.every(l=>l[p]===first[p]))p++;
+      while(q<first.length-p&&labels.every(l=>l[l.length-1-q]===first[first.length-1-q]))q++;
+      const out=[];if(p>=4)out.push(labels.map(l=>norm(l.slice(p))));if(q>=4)out.push(labels.map(l=>norm(l.slice(0,l.length-q))));
+      if(p>=4&&q>=4)out.push(labels.map(l=>norm(l.slice(p,l.length-q))));return out;};
+    const targets=found.map(g=>({at:g.container,labels:g.labels}));
+    {const byBox=new Map();
+      for(const e of known){if(!(['radio','checkbox'].includes(e.type)||e.matches('[role=radio],[role=checkbox]')))continue;
+        const box=e.closest('fieldset,[role=radiogroup],[role=group]')||root;if(!byBox.has(box))byBox.set(box,[]);byBox.get(box).push(name(e));}
+      for(const [box,labels] of byBox)targets.push({at:box,labels});}
+    const same=(a,b)=>a.length===b.length&&a.every(x=>b.some(y=>norm(y).toLowerCase()===x.toLowerCase()));
+    for(const g of found){
+      if(g.labels.length<2||!g.labels.every(Boolean))continue;
+      for(const rest of residuals(g.labels)){
+        if(!rest.every(Boolean)||new Set(rest).size!==rest.length)continue;
+        if(targets.some(t=>t.at!==g.container&&new Set(t.labels).size===t.labels.length&&same(rest,t.labels))){g.tool='mirrors another group one option for one';break}
+      }
+    }
+    // 2. A group whose every label is page workflow is chrome, not answers. Formative's Previous/Next arrived as a
+    //    two-member "choice" group because the pool filter judges ONE control at a time: Next is a navigation word it
+    //    knows and Previous is not, and a lone survivor is no group until a second unrecognised control joins it.
+    //    Judged on the WHOLE group, reusing the vocabulary the navigation path already owns (chromeLabel,
+    //    navigationKind) plus the auxiliary words, never a third list. Markup outranks any label: a member the page
+    //    marks up as an answer control keeps its group, so a real option that happens to read "Feedback" is safe.
+    const auxiliaryGroup=/^(?:(?:show|hide|toggle|get|see|view|open|read)\s+)?(?:an?\s+|the\s+)?(?:hint|feedback|explanation|solution|bookmark|sound|audio|mute|settings|help|favorite|draw|start over|skip|report|share|flag)\b/i;
+    for(const g of found){
+      if(g.tool||g.members.some(e=>e.matches('[role=radio],[role=checkbox],[aria-pressed]')))continue;
+      if(g.labels.every(l=>{const t=norm(l);return !!t&&(chromeLabel.test(t)||!!navigationKind(t)||auxiliaryGroup.test(t))}))g.tool='every label is a workflow or auxiliary control';
+    }
     found.complete=pool.length<=400;return found;
   }
   // Supplemental source data only: never register targets or change question identity.
@@ -459,8 +505,14 @@
     const add=(e,kind,label,options=[],current='')=>{const token=target(e);const slot={slot_key:slotKey(e),kind,label:label||kind,options,current,target:token,dom_id:e.id||null,disabled:e.disabled===true||e.getAttribute('aria-disabled')==='true',native:e.tagName==='SELECT',...(parts.length?{part_id:partFor(e),part_scope:partScope(e)}:{})};slots.push(slot);return slot};
     for(const e of elements){
       if(e.matches('input[type=radio],input[type=checkbox],[role=radio],[role=checkbox]')){
-        const type=e.type||e.getAttribute('role'),group=e.closest('fieldset,[role=radiogroup],[role=group]')||root;
-        const gid=type+':'+key(group)+':'+(type==='radio'?(e.name||''): '');
+        // ARIA outranks the DOM property. <button type="button" role="radio"> is pick-one, but HTMLButtonElement.type
+        // reads "button" and used to win, so Formative's single-answer question was typed choice_set and the harness
+        // would have allowed several answers on it (2026-09-24 1:00 AM, slot key button:node:45:). Only radio and
+        // checkbox roles override; any other role still falls back to the DOM type exactly as before.
+        const declared=e.getAttribute('role'),type=(declared==='radio'||declared==='checkbox')?declared:(e.type||declared);
+        const group=e.closest('fieldset,[role=radiogroup],[role=group]')||root;
+        // Only a radio group is identified by its name; the empty trailing segment every other key carried was noise.
+        const gid=type+':'+key(group)+(type==='radio'&&e.name?':'+e.name:'');
         if(!groups.has(gid))groups.set(gid,[]);groups.get(gid).push(e);
       }else if(cells.includes(e)){const detected=interaction(e,cells,target,slotKey(e)),s=add(e,detected.kind,name(e)||norm(e.closest('tr')?.cells[0]?.textContent),e.tagName==='SELECT'?[...e.options].map(o=>norm(o.text)):[],value(e));
         // The editable combobox often precedes the arrow in DOM order. Prefer
@@ -479,7 +531,11 @@
     }
     for(const [gid,es] of groups){const group=es[0].closest('fieldset,[role=radiogroup],[role=group]')||es[0];const s=add(group,gid.startsWith('radio')?'choice':'choice_set',name(group)||'Choose',es.map(name),es.filter(e=>e.checked||e.getAttribute('aria-checked')==='true').map(name));
       s.slot_key=question_key+'/'+(parts.length&&partFor(group)?partFor(group).slice(5)+'/':'')+gid;s.choices=es.map(e=>({label:name(e),target:target(e),checked:!!e.checked||e.getAttribute('aria-checked')==='true',disabled:!!e.disabled||e.getAttribute('aria-disabled')==='true'}));}
+    // A group classified as a tool row or as page chrome is never offered as an answer slot. It is still a
+    // candidate, so its text stays out of the question stem, and the reason is recorded for the log.
+    const suppressed_groups=discovered.filter(g=>g.tool).map(g=>({reason:g.tool,labels:g.labels.slice(0,8)}));
     for(const g of discovered){
+      if(g.tool)continue;
       const signature=question_key+'|'+g.signature,proof=classifiedChoices.get(g.container);
       const receipt=choiceReceipts.get(g.container),owned=receipt?.signature===signature&&g.members.includes(receipt.element);
       const outcome=owned?receipt.element.querySelector(resultIcon):null;
@@ -528,7 +584,7 @@
     last={observation_id,question_key,identity,document_id:doc,question:stem.text||norm(document.title),tables:tableContext.tables,table_context_complete:tableContext.complete,slots,menus,navigation:navigation.slice(0,60),navigation_complete,feedback,page_state,enumeration,parts:partList,candidate_parts,
       save_state:/\bsaved\b/i.test(feedback)?'confirmed':/\bsaving\b/i.test(feedback)?'pending':'unavailable',
       grade_state:/incorrect|wrong/i.test(feedback)?'incorrect':/partial/i.test(feedback)?'partial':/correct/i.test(feedback)?'correct':'unknown',
-      discovery_complete:discovered.complete,completeness:{complete:!incomplete&&!limited,note:(incomplete||limited)?'QUESTION_INCOMPLETE: traversal or identity limit; inspect a smaller question.':''},targets,
+      discovery_complete:discovered.complete,...(suppressed_groups.length?{suppressed_groups}:{}),completeness:{complete:!incomplete&&!limited,note:(incomplete||limited)?'QUESTION_INCOMPLETE: traversal or identity limit; inspect a smaller question.':''},targets,
       frames:all(root,'iframe,frame').filter(shown).map(e=>{const r=e.getBoundingClientRect();let exact=true;for(let n=e;n;n=n.parentElement)if(getComputedStyle(n).transform!=='none')exact=false;return {target:target(e),src:e.src,title:e.title,x:r.x+e.clientLeft,y:r.y+e.clientTop,w:e.clientWidth,h:e.clientHeight,exact:exact&&Math.abs(r.width-e.offsetWidth)<1}}),visual:!!root.querySelector('img,svg,canvas')};
     const {targets:ignored,...publicState}=last;
     return {ok:true,...publicState,origin:location.origin,url:location.href,host:location.host};

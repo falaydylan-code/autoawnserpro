@@ -141,7 +141,12 @@ class RepairRequest(PlanRequest):
 
 PLANNER_PROMPT = '''Solve one sufficiently observed question. Return exactly one JSON object and no other text.
 Candidate choice groups are offered as unresolved slots with their full visible options. Supported groups
-are classified before planning. One gap you may fill: when evidence.reason says single or multiple
+are classified before planning. A group the harness DISCOVERED (interaction.adapter candidate_choices) is its
+own guess from repeated page structure, so it is OPTIONAL: if it is a per-option TOOL rather than the answer --
+strikethrough, eliminate, flag, read aloud -- leave it out and answer the real control. Never cross out, strike
+through or eliminate the option you are choosing. Slots the page itself marks up (value, selection, and native
+choice/choice_set groups) are still required, and at least one answer must be planned. One gap you may fill:
+when evidence.reason says single or multiple
 selection is not established, plan that group directly -- choose_one means one answer, set_choice_set means
 several -- judged from the question wording and the choices. The harness accepts your operation as that
 reading only while the page text says neither, then verifies exactly what ends up selected. A group whose
@@ -341,12 +346,21 @@ def validate_context(response, observation, failed=None):
             raise ValueError('GUARD_REJECTED: repair may change only the failed task.')
     else:
         planned={t.slot_key for t in response.tasks};resolved={k for k,v in slots.items() if v.get('kind')!='unresolved'}
+        # A DISCOVERED group is the harness's own guess, so it is OPTIONAL: the model may leave it alone. Formative
+        # gives every option a second button ("Strikethrough this option -- Frictional unemployment"); repeated
+        # siblings with unique labels and a readable mode made that a resolved 'choice' slot, and this rule then
+        # demanded the model plan crossing out its own correct answer (2026-09-24 1:00 AM, macroecon quiz 1). It
+        # refused, correctly, and the run died. An answer control the PAGE marks up -- a field, a dropdown, a native
+        # radio/checkbox group -- is still required: those are contracts, not guesses. Optional never means empty:
+        # a plan with no tasks is already refused above as SCHEMA_INVALID, and again by planner_runtime.js before
+        # execution, so no third guard is added here.
+        discovered={k for k,v in slots.items() if (v.get('interaction') or {}).get('adapter')=='candidate_choices'}
         # A candidate group whose ONLY missing evidence is pick-one vs pick-many may be planned directly: the
         # operation is the model's reading (choose_one = one answer, set_choice_set = several). The extension
         # accepts it only while the page text says neither and a selected-state readback exists, then verifies.
         # Every other unresolved slot is still never planned. Models plan; they do not take optional detours.
-        if not resolved<=planned or not (planned-resolved)<={k for k,v in slots.items() if mode_assertable(v)}:
-            raise ValueError('QUESTION_INCOMPLETE: plan must cover every resolved offered slot (unresolved ones are re-checked by the harness, never planned).')
+        if not (resolved-discovered)<=planned or not (planned-resolved)<={k for k,v in slots.items() if mode_assertable(v)}:
+            raise ValueError('QUESTION_INCOMPLETE: plan must cover every resolved offered slot the page itself marks up (a group the harness discovered is its own guess and may be left alone; unresolved ones are re-checked by the harness, never planned).')
     for t in response.tasks:
         s=slots.get(t.slot_key)
         if not s:raise ValueError('GUARD_REJECTED: task does not match a resolved offered slot.')
