@@ -800,11 +800,21 @@
       if(failed&&(tasks.length!==1||tasks[0].slot_key!==failed.slot_key||tasks[0].task_id!==failed.task_id||JSON.stringify(tasks[0].depends_on||[])!==JSON.stringify(failed.depends_on||[])))throw new Fault('GUARD_REJECTED','Repair widened its scope.');
       // A slot that stayed unresolved after identification (a locked or computed cell) is not required in the plan; the
       // rounds after the batch re-check it in case answering unlocked it.
-      const required=obs.slots.filter(s=>s.kind!=='unresolved');
+      // Mirrors planner.py validate_context: a group the harness DISCOVERED (adapter candidate_choices) is its own guess
+      // from repeated page structure, so the model may leave it alone -- a per-option tool row is not an answer. Every
+      // slot the PAGE marks up (a field, a dropdown, a native radio/checkbox group) is still required. The backend
+      // learned this in the Formative bundle and this copy did not, so a plan the backend accepted was refused here
+      // with "Plan does not cover every answerable slot" and the fix did nothing on a live run.
+      const resolved=obs.slots.filter(s=>s.kind!=='unresolved'),required=resolved.filter(s=>s.interaction?.adapter!=='candidate_choices');
       // The one unresolved slot a plan may name: a candidate choice group whose only missing evidence is pick-one vs
       // pick-many. The operation is the model's reading; execute() has the page confirm it before anything is clicked.
       const keys=new Set(tasks.map(t=>t.slot_key)),assertable=obs.slots.filter(s=>this.modeAssertable(s));
-      if(!failed&&(keys.size!==tasks.length||!required.every(r=>keys.has(r.slot_key))||![...keys].every(k=>required.some(r=>r.slot_key===k)||assertable.some(a=>a.slot_key===k))))throw new Fault('QUESTION_INCOMPLETE','Plan does not cover every answerable slot.');
+      if(!failed&&(keys.size!==tasks.length||!required.every(r=>keys.has(r.slot_key))||![...keys].every(k=>resolved.some(r=>r.slot_key===k)||assertable.some(a=>a.slot_key===k))))throw new Fault('QUESTION_INCOMPLETE','Plan does not cover every answerable slot.');
+      // A discovered group the model was SHOWN and chose to leave alone is a decision, not a gap: remember it, so the
+      // round loop below does not re-offer it as "an answer control that appeared after the planned answers" and ask
+      // again -- the model skips it again, the plan comes back empty, and the run dies on its own correct answer.
+      if(!failed&&this.current){const skipped=resolved.filter(s=>s.interaction?.adapter==='candidate_choices'&&!keys.has(s.slot_key)).map(s=>s.slot_key);
+        if(skipped.length)this.current.optionalSkipped=[...new Set([...(this.current.optionalSkipped||[]),...skipped])];}
       for(const t of tasks){const s=this.slot(obs,t.slot_key);if(this.modeAssertable(s)){if(!['choose_one','set_choice_set'].includes(t.operation))throw new Fault('GUARD_REJECTED','A candidate choice group takes choose_one or set_choice_set only.');continue}if(!allowed[s.kind]||allowed[s.kind]!==t.operation)throw new Fault('GUARD_REJECTED','Task operation does not match the slot.');}
       const remaining=new Set(tasks.map(t=>t.task_id)),ordered=[];while(remaining.size){const t=tasks.find(t=>remaining.has(t.task_id)&&(t.depends_on||[]).every(id=>ordered.some(x=>x.task_id===id)||(failed?.depends_on||[]).includes(id)));if(!t)throw new Fault('GUARD_REJECTED','Dependency cycle or unknown task.');ordered.push(t);remaining.delete(t.task_id)}return ordered;
     }
@@ -892,7 +902,7 @@
         }
         const views=[];const recheck=async o=>{for(const sl of o.slots)if(sl.kind==='unresolved')delete this.current.interactionActions?.[sl.slot_key];return this.resolveInteractions(o)};
         if(this.current.parts?.length>1){for(const part of this.current.parts)views.push(await recheck(await this.showPart(null,part.part_id)))}else{const after=await this.observe();this.same(after);views.push(await recheck(after))}
-        const newSlots=views.flatMap(v=>v.slots).filter(s=>!this.current.plan.tasks.some(t=>t.slot_key===s.slot_key)&&s.kind!=='unresolved');
+        const newSlots=views.flatMap(v=>v.slots).filter(s=>!this.current.plan.tasks.some(t=>t.slot_key===s.slot_key)&&s.kind!=='unresolved'&&!(this.current.optionalSkipped||[]).includes(s.slot_key));
         const unresolved=views.flatMap(v=>v.slots).filter(s=>s.kind==='unresolved');
         this.current.not_answerable=unresolved.map(s=>s.label||s.slot_key);
         this.current.unresolved=unresolved.filter(s=>!s.disabled).map(s=>({slot_key:s.slot_key,label:s.label}));
