@@ -126,3 +126,16 @@ def test_uncertain_submission_is_not_repeated_on_resume(extension):
     second=run(w,tid,resume=True)
     assert second['status']=='needs_review'
     assert page.evaluate('clicks')==['Medium'], (first['ledger'],second['ledger'],details(second))
+
+
+def test_a_cell_opener_is_never_a_workflow_control(extension):
+    """The widened scan reads unlabelled buttons too, so every dropdown arrow INSIDE a response cell became an
+    'unknown' navigation candidate -- twenty on one sheet. Wrong on its own, and enough extra payload to push the
+    observation past its 100 KB limit part-way through a run (test_inspection_mapping, merged 0.10.46).
+    A control that belongs to an answer is not a workflow control: containment, not equality."""
+    page, w, tid = navigate(extension, 'custom_dropdowns.html')
+    found = w.evaluate('''async id=>{const e=new AssignmentPlanner.Engine(__assignmentHarness.plannerBridge(),id,{});const o=await e.observe();
+      return {navigation:o.navigation.map(n=>({label:n.label,kind:n.kind})),slots:o.slots.length,
+        openers:await chrome.scripting.executeScript({target:{tabId:id,allFrames:true},func:()=>document.querySelectorAll('.dropdownButton').length}).then(r=>r.reduce((s,x)=>s+(x.result||0),0))}}''', tid)
+    assert found['slots'] > 0 and found['openers'] > 0, found          # the page really does have cells and arrows
+    assert found['navigation'] == [], found['navigation']              # and not one of them is a workflow control

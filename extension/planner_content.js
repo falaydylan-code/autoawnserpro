@@ -494,7 +494,13 @@
       s.answer_result=outcome?(outcome.matches('[data-testid="icon-close-x"]')?'incorrect':'correct'):null;
     }
     const menus=all(document,'[role=listbox] [role=option]').filter(shown).map(e=>{const c=owner(e,cells);return {label:name(e),target:target(e),owner:c?slotKey(c):null,disabled:!!e.disabled||e.getAttribute('aria-disabled')==='true'}});
-    const navigation=all(document,'button,a,[role=button],input[type=submit],input[type=button]').filter(e=>shown(e)&&safe(e)&&!slots.some(s=>targets.get(s.target)===e||s.choices?.some(c=>targets.get(c.target)===e))).map(e=>{
+    // A control that belongs to an answer is not a workflow control. Widening the scan to include unlabelled
+    // buttons turned every dropdown-opening arrow INSIDE a response cell into an "unknown" navigation candidate --
+    // twenty of them on one sheet, which is both wrong and enough extra payload to push the observation past its
+    // 100 KB limit mid-run. Containment, not equality: the opener sits inside the cell, it is not the cell.
+    const ownedByAnswer=e=>e.closest(answerCells)||e.closest('[role=listbox],[role=option]')
+      ||slots.some(s=>{const el=targets.get(s.target);return el===e||!!el?.contains(e)||!!s.choices?.some(c=>{const ce=targets.get(c.target);return ce===e||!!ce?.contains(e)})});
+    const navigation=all(document,'button,a,[role=button],input[type=submit],input[type=button]').filter(e=>shown(e)&&safe(e)&&!ownedByAnswer(e)).map(e=>{
       const info=navigationInfo(e);
       return info?{...info,target:target(e),disabled:!!e.disabled||e.getAttribute('aria-disabled')==='true'||!!e.closest('[inert]')}:null}).filter(Boolean);
     const navigation_complete=navigation.length<=60;
