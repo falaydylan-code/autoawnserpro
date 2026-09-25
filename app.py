@@ -446,7 +446,7 @@ async def capabilities(protocol: int = 3):
     # falls back to the protocol-3 default rather than 422-ing the negotiation,
     # so the planner's `?protocol=4` request actually returns protocol 4.
     protocol = protocol if protocol in (3, 4) else 3
-    return {'protocol': protocol, 'extension': '0.10.48', 'supported_protocols': [3,4], 'request_wait_seconds': planner.REQUEST_DEADLINE_MAX,
+    return {'protocol': protocol, 'extension': '0.10.49', 'supported_protocols': [3,4], 'request_wait_seconds': planner.REQUEST_DEADLINE_MAX,
             'planner_release': 'preview', 'planner_output_tokens': planner.call_limits({}),
             'features': ['parts', 'ordering', 'visual_input', 'visual_verification', 'browser_input', 'page_states', 'no_step_ceiling',
                          'task_plans', 'scoped_observations', 'stable_slots', 'typed_verification', 'bounded_repair', 'geometry_inspection', 'frame_scoped_inspection','interaction_classification','choice_discovery','bounded_format_correction','contextual_navigation']}
