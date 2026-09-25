@@ -14,6 +14,12 @@
                      check=reload, which navigates the same element and keeps its id -- which is why reload passed here
                      and the real site did not.
        check=rebuildstem  Check rebuilds the frame AND rewrites the question stem: a genuinely different question
+       check=pregrade    rebuild graded with body.pregrade-mode (McGraw's own code on Check) -- all text lost to [class*=grade]
+       check=banner      rebuild graded with a banner none of the feedback rules recognise
+       check=wipe        rebuild graded but the answer box comes back EMPTY (text unchanged: the key holds, nothing to judge)
+       check=verdictonly the graded page shows only a verdict banner: every question's graded page reads alike
+       check=wipebanner  the page reads differently AND the answer is gone -- the answers cannot vouch for it
+       check=different   Check lands on a DIFFERENT question (q+1, its box empty)
        next=rebuild  Next destroys the frame and builds a new one holding question n+1
        delay=<ms>    the reload after Check starts that long after the click
        slow=1        the reloaded frame shows its answer field only 800 ms after it loads (half-loaded meanwhile)
@@ -22,6 +28,7 @@
        next=same     Next reloads the frame with the SAME question (new document, same question)
        next=none     Next does nothing
        stray=1       the frame reloads itself the moment a value is typed (a change the harness did not cause)
+       bare=1        the question frame has no <main> (McGraw's accounting tool): the harness's root is <body>
      Question 3 is the last: its Next is disabled. -->
 <main>
   <div id="position" aria-current="step">Question 1 of 3</div>
@@ -35,18 +42,24 @@
 <script>
 const params=new URLSearchParams(location.search),mode={check:params.get('check')||'reload',next:params.get('next')||'reload'};
 window.answers={};window.clicks=[];window.loads=[];let n=1;
-frame.src='transitions_q.html?q=1'+(params.get('stray')?'&stray=1':'');   // stray applies from the first document; slow only to reloads
-const extra=()=>(params.get('slow')?'&slow=1':'')+(params.get('stray')?'&stray=1':'');
-const src=(q,graded,stem)=>`transitions_q.html?q=${q}${graded?'&graded=1':''}${stem?'&stem=revised':''}${extra()}`;
+frame.src='transitions_q.html?q=1'+(params.get('stray')?'&stray=1':'')+(params.get('bare')?'&bare=1':'');   // stray applies from the first document; slow only to reloads
+const extra=()=>(params.get('slow')?'&slow=1':'')+(params.get('stray')?'&stray=1':'')+(params.get('bare')?'&bare=1':'');
+const src=(q,graded,stem,more='')=>`transitions_q.html?q=${q}${graded?'&graded=1':''}${stem?'&stem=revised':''}${more}${extra()}`;
 const load=(q,graded,stem)=>{document.getElementById('frame').src=src(q,graded,stem)};
-const rebuild=(q,graded,stem)=>{const f=document.createElement('iframe');f.id='frame';f.src=src(q,graded,stem);document.getElementById('frame').replaceWith(f);window.rebuilds=(window.rebuilds||0)+1};
+const rebuild=(q,graded,stem,more)=>{const f=document.createElement('iframe');f.id='frame';f.src=src(q,graded,stem,more);document.getElementById('frame').replaceWith(f);window.rebuilds=(window.rebuilds||0)+1};
 check.onclick=()=>{clicks.push('check');
   if(mode.check==='reload')setTimeout(()=>load(n,true),Number(params.get('delay')||0));
   else if(mode.check==='redraw')document.getElementById('frame').contentWindow.grade();
   else if(mode.check==='top')verdict.textContent='Correct';
   else if(mode.check==='stem')load(n,true,true);
   else if(mode.check==='rebuild')setTimeout(()=>rebuild(n,true),Number(params.get('delay')||0));
-  else if(mode.check==='rebuildstem')rebuild(n,true,true);};
+  else if(mode.check==='rebuildstem')rebuild(n,true,true);
+  else if(mode.check==='pregrade')rebuild(n,true,false,'&pregrade=1');
+  else if(mode.check==='banner')rebuild(n,true,false,'&banner=1');
+  else if(mode.check==='wipe')rebuild(n,true,false,'&wipe=1');
+  else if(mode.check==='wipebanner')rebuild(n,true,false,'&wipe=1&banner=1');
+  else if(mode.check==='verdictonly')rebuild(n,true,false,'&banner=1&only=1');
+  else if(mode.check==='different')rebuild(n+1,false);};
 next.onclick=()=>{clicks.push('next');verdict.textContent='';
   if(mode.next==='reload'){n++;position.textContent=`Question ${n} of 3`;load(n)}
   else if(mode.next==='swap'){n++;position.textContent=`Question ${n} of 3`;document.getElementById('frame').contentWindow.show(n)}

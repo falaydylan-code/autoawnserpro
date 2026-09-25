@@ -407,6 +407,25 @@
     modeAssertable(s){const e=s?.interaction?.evidence;return s?.kind==='unresolved'&&s.interaction?.adapter==='candidate_choices'&&String(e?.reason||'').startsWith('Single or multiple selection')&&!!(e?.state_attribute||e?.verification==='result_icon')}
     async noteAssertion(s,result){if(!result?.asserted_mode)return;const word=result.asserted_mode==='choice'?'pick one':'pick many';
       await this.event('INSPECT',result.accepted?`Model read this group as ${word}; accepted because the page text says neither`:`Model read this group as ${word}; not accepted`,{slot_key:s.slot_key,adapter:'candidate_choices',asserted_mode:result.asserted_mode,accepted:!!result.accepted,actual:result.evidence,action_executed:false})}
+    // After our own Check, grading is SUPPOSED to change the page's words -- banners, ticks, highlighted answers,
+    // solution text, a body class such as McGraw's "pregrade-mode" -- so wording is the weakest evidence of "same
+    // question" at exactly that moment. The answers just verified are the strongest: on the same question, graded,
+    // they are still in the same boxes; on a different question those boxes are empty or hold something else.
+    // A box is matched by what it is inside its frame (part + element key), not by the frame's key, which moves with
+    // the wording. Same question = every verified box that is visible still holds its verified answer, and at least
+    // three of them (or all, when fewer) are visible. One visible box holding anything else, or an ambiguous box,
+    // and it is not the same question. Used only to judge the page our own Check produced; nothing is typed after.
+    answersStillInPlace(obs){
+      const tail=k=>{const a=k.indexOf('/'),b=a<0?-1:k.indexOf('/',a+1);return b<0?null:k.slice(b+1)};
+      const byTail=new Map();for(const x of obs.slots){const t=tail(x.slot_key);if(t)byTail.set(t,[...(byTail.get(t)||[]),x])}
+      const verified=(this.current?.plan?.tasks||[]).filter(t=>this.current.completed?.[t.slot_key]&&plannedValue(t)!=='');
+      let seen=0;
+      for(const t of verified){const found=byTail.get(tail(t.slot_key));if(!found)continue;if(found.length!==1)return {same:false,seen,of:verified.length,why:'a box matches more than one control'};
+        let ok=false;try{ok=this.matches(t,found[0])}catch{ok=false}
+        if(!ok)return {same:false,seen,of:verified.length,why:'a verified box now holds something else'};seen++}
+      const need=Math.min(3,verified.length);
+      return seen>=need&&seen>0?{same:true,seen,of:verified.length}:{same:false,seen,of:verified.length,why:`only ${seen} of the ${verified.length} verified answers are visible`};
+    }
     matches(task,s){const d=task.desired;
       if(!TASK_OPERATION[s.kind]||TASK_OPERATION[s.kind]!==task.operation)return false;
       switch(task.operation){
@@ -1185,8 +1204,21 @@
                 (action==='answer_submit'&&fresh.navigation.some(n=>n.kind==='advance'&&!n.disabled&&!before.navigation.some(p=>p.kind==='advance'&&!p.disabled))))&&(fresh.slots.length>0||fresh.page_state!=='answering'));
               if(!settled.settled)throw new Fault('INPUT_NO_EFFECT',settled.replaced?`Check replaced the page's document but it did not settle within ${LIMITS.navigation/1000} s. It will not be repeated.`:'Check produced no new feedback. It will not be repeated.');
               obs=settled.obs;
+              let kept=null;
               if(obs.question_key!==this.current.key){
-                if(action!=='answer_submit')throw new Fault('TARGET_STALE',`Question identity changed after Check (${identityMovers(this.current.identity,obs.identity)}); the graded page was not entered.`,{identity:{was:this.current.identity||null,now:obs.identity||null},document_replaced:settled.replaced});
+                // The page our Check produced reads differently. Judge it by the answers, not the words.
+                kept=this.answersStillInPlace(obs);
+                if(kept.same){
+                  await this.event('VERIFY',`The graded page reads differently (${identityMovers(this.current.identity,obs.identity)}), but ${kept.seen} of the ${kept.of} verified answers are still in the same boxes; it is the same question.`,{was:this.current.key,now:obs.question_key,answers_in_place:kept.seen});
+                  // Only the live comparison moves to the graded page's key. The ledger record stays where the question
+                  // started: graded pages that lost their text can share one key across DIFFERENT questions (same address,
+                  // same box ids, no text), and moving each record there made every question overwrite the one before.
+                  this.current.key=obs.question_key;
+                  this.repin(obs);
+                }
+              }
+              if(obs.question_key!==this.current.key){
+                if(action!=='answer_submit')throw new Fault('TARGET_STALE',`Question identity changed after Check (${identityMovers(this.current.identity,obs.identity)})${kept?.why?`; answers not proven in place: ${kept.why}`:''}; the graded page was not entered.`,{answers_in_place:kept,identity:{was:this.current.identity||null,now:obs.identity||null},document_replaced:settled.replaced});
                 // Only an explicit current-answer submission may auto-advance. A changed feedback/review page is
                 // not a new unanswered question and must not feed a revealed key into another answer plan.
                 if(obs.page_state!=='complete'&&(!obs.slots.length||obs.feedback||obs.grade_state!=='unknown'||obs.slots.some(s=>s.result_feedback)))throw new Fault('TARGET_STALE','Answer submission changed the page, but a new unanswered question could not be established.');

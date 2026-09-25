@@ -60,6 +60,17 @@
       allowed_actions:kind?[kind]:['check','answer_submit','advance']};
   }
   const textExcluded='script,style,template,nav,output,[role=listbox],[role=option],[role=status],[role=alert],[class*=feedback],[class*=result],[class*=correct],[class*=grade],[class*=score],[class*=saved],[class*=attempt],#__assignment_lab_cursor,#__assignment_lab_badges';
+  // renderedText only. PAGE-MODE words -- grade, score, saved, attempt -- are what sites put on whole containers:
+  // McGraw's accounting tool runs $("body").addClass("pregrade-mode") when "Check my work" grades it, and the body is
+  // that frame's question root, so [class*=grade] emptied the ENTIRE question text (Ch.3 Q1, 7:10 PM, 0.10.47: the
+  // stem hash became 811c9dc5, the hash of '', and the run stopped right after a correct, graded answer); "quiz-attempt"
+  // containers do the same before any answer is given, and then the model gets no question at all. So those four
+  // words drop an element's text only when it holds no answer control. feedback / result / correct stay unconditional:
+  // they name the CONTENT of a reveal, and a reveal box beside a retry input must never put the answer key into the
+  // question text. Every other reader of textExcluded keeps the full list, unchanged.
+  const modeWords='[class*=grade],[class*=score],[class*=saved],[class*=attempt]';
+  const textAlways=textExcluded.split(',').filter(x=>!modeWords.split(',').includes(x)).join(',');
+  const holdsAnswer=e=>!!e.querySelector('input:not([type=hidden]),textarea,select,[role=radio],[role=checkbox],[role=gridcell],td.responseCell,[contenteditable=true]');
   const liveFeedback=e=>e.hasAttribute('aria-live')&&!e.querySelector('input,textarea,select,button,[tabindex],[role=radio],[role=checkbox]')&&/^(?:(?:correct|incorrect|wrong)[.!]?$|(?:the )?correct answer(?:\s+is\b|\s*:)|your answer(?:\s+is\b|\s*:)|you (?:answered|selected)\b)/i.test(norm(e.innerText));
   const shown=e=>!!e?.isConnected&&!e.closest('[hidden],[aria-hidden=true],script,style,template')&&getComputedStyle(e).visibility!=='hidden'&&getComputedStyle(e).display!=='none'&&!!e.getClientRects().length;
   const name=e=>norm(e.getAttribute('aria-label')||[...(e.labels||[])].map(l=>l.innerText).join(' ')||e.innerText||e.getAttribute('title')||e.getAttribute('placeholder')||'');
@@ -100,7 +111,7 @@
   const onScreen=e=>!!e?.isConnected&&!e.closest('[hidden],script,style,template')&&getComputedStyle(e).visibility!=='hidden'&&getComputedStyle(e).display!=='none'&&!!e.getClientRects().length;
   function renderedText(root,exclude,choice=false,visible=shown){let parts=[],count=0,complete=true;const walk=n=>{if(++count>12000){complete=false;return}if(n.nodeType===3){if(norm(n.textContent))parts.push(n.textContent);return}if(n.nodeType!==1)return;
     // aria-live announces changes, including whole questions; it is not evidence of feedback.
-    if(exclude.has(n)||!visible(n)||(!choice&&n.matches('button'))||n.matches(textExcluded)||n.matches(resultIcon)||liveFeedback(n))return;
+    if(exclude.has(n)||!visible(n)||(!choice&&n.matches('button'))||n.matches(textAlways)||(n.matches(modeWords)&&!holdsAnswer(n))||n.matches(resultIcon)||liveFeedback(n))return;
     if(n.matches('input,textarea,select'))return;for(const c of n.childNodes)walk(c);if(n.shadowRoot)for(const c of n.shadowRoot.childNodes)walk(c)};walk(root);return {text:norm(parts.join(' ')),complete};}
   function choiceLabel(e,container=null){let branch=e;while(container&&branch.parentElement&&branch.parentElement!==container)branch=branch.parentElement;const visible=renderedText(branch,new Set(),true).text,accessible=norm(e.getAttribute('aria-label')||e.getAttribute('title')||'');return visible&&accessible&&visible!==accessible&&!visible.includes(accessible)?accessible+' — '+visible:visible||accessible;}
   function discoverChoices(root,known){

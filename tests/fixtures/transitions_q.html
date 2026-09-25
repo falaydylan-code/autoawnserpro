@@ -11,8 +11,10 @@
 </main>
 <script>
 const p=new URLSearchParams(location.search);let n=Number(p.get('q')||1);
+// McGraw's accounting-tool frame has no <main>, no role=main, no question id: the harness's question root is <body>.
+if(p.get('bare')){const m=document.querySelector('main'),d=document.createElement('div');while(m.firstChild)d.appendChild(m.firstChild);m.replaceWith(d)}
 parent.loads.push(location.search);
-function render(){body.innerHTML='<label>Amount <input id="amount" type="text"></label>';amount.value=parent.answers[n]||'';
+function render(){body.innerHTML='<label>Amount <input id="amount" type="text"></label>';amount.value=p.get('wipe')?'':(parent.answers[n]||'');
   amount.addEventListener('input',()=>{parent.answers[n]=amount.value;if(p.get('stray'))location.reload()});}
 function show(q){n=q;stem.textContent=`Question ${n}: enter the amount for item ${n}`+(p.get('stem')==='revised'?' (revised)':'');feedback.textContent='';render()}
 function grade(){feedback.textContent='Correct'}
@@ -20,4 +22,10 @@ window.show=show;window.grade=grade;
 stem.textContent=`Question ${n}: enter the amount for item ${n}`+(p.get('stem')==='revised'?' (revised)':'');
 if(p.get('slow'))setTimeout(render,800);else render();
 if(p.get('graded'))grade();
+// McGraw's accounting tool marks the whole page when it grades: $("body").addClass("pregrade-mode")
+if(p.get('pregrade'))document.body.classList.add('pregrade-mode');
+// a grade banner marked up with nothing the harness recognises as feedback
+// a graded page that shows ONLY a verdict: its question wording is gone, so every question's graded page reads alike
+if(p.get('only'))stem.textContent='';
+if(p.get('banner'))(document.querySelector('main')||document.body).insertAdjacentHTML('afterbegin','<div>Answer is complete and correct.</div>');
 </script>

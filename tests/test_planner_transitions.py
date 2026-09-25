@@ -87,11 +87,15 @@ def test_a_late_and_half_loaded_reload_is_waited_for_not_settled_on(extension):
 
 
 def test_check_that_changes_the_question_stops_with_the_ingredient_named(extension):
-    page, w, tid = navigate(extension, 'transitions.html?check=stem')
+    """0.10.48: this used check=stem -- the SAME question reworded, its answer still in the box. That is now, rightly,
+    the same question (see the answers-in-place tests below). What this test protects is a Check that lands on a
+    DIFFERENT question: its box is empty, so the answers prove nothing, and the run must stop with nothing typed."""
+    page, w, tid = navigate(extension, 'transitions.html?check=different')
     result = run(w, tid)
     assert result['status'] == 'needs_review'
     stop = stale(result)[0]
-    assert stop['detail'].startswith('TARGET_STALE: Question identity changed after Check (stem)'), stop['detail']
+    assert stop['detail'].startswith('TARGET_STALE: Question identity changed after Check ('), stop['detail']
+    assert 'stem' in stop['detail'] and 'a verified box now holds something else' in stop['detail'], stop['detail']
     assert stop['failure_data']['document_replaced'] is True
     assert page.evaluate('window.answers') == {'1': '42'} and page.evaluate('window.clicks') == ['check']   # nothing entered into the new page
 
@@ -179,11 +183,81 @@ def test_a_rebuilt_frame_holding_a_different_question_still_stops_and_says_every
     """The guard is kept, only its input is fixed: a rebuild that brings a DIFFERENT question must still stop, nothing
     typed into it. And the message must name every ingredient that moved -- it used to return at the first difference,
     so a frame change hid whether the question's own text had changed too."""
-    page, w, tid = navigate(extension, 'transitions.html?check=rebuildstem')
+    page, w, tid = navigate(extension, 'transitions.html?check=different')
     result = run(w, tid)
     assert result['status'] == 'needs_review'
     stop = stale(result)[0]
     assert stop['detail'].startswith('TARGET_STALE: Question identity changed after Check'), stop['detail']
     assert 'stem' in stop['detail'], stop['detail']                                                   # not hidden behind "frames"
+    assert stop['failure_data']['answers_in_place']['same'] is False
     assert page.evaluate('window.answers') == {'1': '42'}                                              # nothing entered into the new page
     assert page.evaluate('window.clicks') == ['check']
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# After our own Check, judge the page by the ANSWERS, not the words (0.10.48)
+#
+# McGraw Ch.3 Q1 (2026-09-24 7:10 PM, 0.10.47): past the frame fix, the run stopped again after a correct, graded
+# answer -- TARGET_STALE (stem); the new stem hash 811c9dc5 is hash(''). Read live on the study copy: McGraw's
+# accounting tool runs $("body").addClass("pregrade-mode") when Check grades, the body is that frame's question
+# root, and [class*=grade] in the text exclusions dropped the ENTIRE question text. Two changes, both general:
+#   * planner_content.js: the page-mode words (grade/score/saved/attempt) drop an element's text only when it holds
+#     no answer control; feedback/result/correct stay unconditional so a reveal can never leak into question text.
+#   * planner_runtime.js: grading is SUPPOSED to change the words, so after our own Check the question is the same
+#     one when the answers just verified are still in the same boxes. That also covers a banner no rule recognises
+#     and a page that rewords itself when it grades. A Check that lands on a different question, or that wipes the
+#     answers, still stops -- and says why.
+# ---------------------------------------------------------------------------------------------------------------
+
+
+def test_a_body_switched_to_pregrade_mode_keeps_its_question_text(extension):
+    """McGraw's own code, on Check. On 0.10.47 this emptied the whole question text and stopped the run."""
+    page, w, tid = navigate(extension, 'transitions.html?check=pregrade&bare=1')                     # root = <body>, as live
+    result = run(w, tid)
+    assert result['status'] == 'finished', result['events'][-3:]
+    assert result['questions'] == 3 and not stale(result)
+    assert page.evaluate('window.answers') == {'1': '42', '2': '42', '3': '42'}
+
+
+def test_an_unrecognised_grade_banner_is_judged_by_the_answers(extension):
+    """A banner with no feedback markup changes the question text; the answer still in the box proves it is the same one."""
+    page, w, tid = navigate(extension, 'transitions.html?check=banner')
+    result = run(w, tid)
+    assert result['status'] == 'finished', result['events'][-3:]
+    assert not stale(result) and result['questions'] == 3
+    kept = details(result, 'The graded page reads differently')
+    assert len(kept) == 3 and all('still in the same boxes' in e['detail'] for e in kept), [e['detail'] for e in kept]
+
+
+def test_a_page_that_rewords_itself_when_graded_is_still_the_same_question(extension):
+    for mode in ['stem', 'rebuildstem']:                                                   # reloaded, and rebuilt
+        page, w, tid = navigate(extension, 'transitions.html?check=' + mode)
+        result = run(w, tid)
+        assert result['status'] == 'finished', (mode, result['events'][-3:])
+        assert not stale(result) and result['questions'] == 3, mode
+        assert page.evaluate('window.answers') == {'1': '42', '2': '42', '3': '42'}, mode
+
+
+def test_a_graded_page_that_reads_differently_and_lost_the_answers_is_not_vouched_for(extension):
+    """The answers are the evidence, so a page that changed AND no longer holds them proves nothing: stop, say why,
+    and never press Next past it. (A page that only clears the box keeps its fingerprint -- typed values are not part
+    of it -- so there is nothing to judge and the run carries on as it always has; check=wipe exercises that.)"""
+    page, w, tid = navigate(extension, 'transitions.html?check=wipebanner')
+    result = run(w, tid)
+    assert result['status'] == 'needs_review', result['events'][-3:]
+    stop = stale(result)[0]
+    assert 'answers not proven in place' in stop['detail'] and 'holds something else' in stop['detail'], stop['detail']
+    assert not details(result, 'The graded page reads differently')
+    assert page.evaluate('window.clicks') == ['check']
+
+
+def test_graded_pages_that_read_alike_do_not_overwrite_each_others_record(extension):
+    """When grading strips the question wording, every question's graded page can share ONE key (same address, same
+    box ids, no text). Adopting that key must not move each question's record onto it, or each overwrites the last --
+    the finished-question count the harness uses for enumeration and resume would drop from 3 to 1."""
+    page, w, tid = navigate(extension, 'transitions.html?check=verdictonly')
+    result = run(w, tid)
+    assert result['status'] == 'finished', result['events'][-3:]
+    assert len(details(result, 'The graded page reads differently')) == 3
+    assert result['questions'] == 3, 'graded pages that read alike merged three questions into one record'
+    assert page.evaluate('window.answers') == {'1': '42', '2': '42', '3': '42'}
