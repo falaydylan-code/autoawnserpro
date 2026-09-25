@@ -437,13 +437,32 @@
     // matters: a genuinely new question that happens to arrive pre-selected with the same short answer (a True/False
     // drill with a default) is an EQUAL match, not a longer one, and must fall through and be answered, because
     // skipping it would cost a mark. A different answer, or no selection, is not this page and falls through too.
+    // What a task actually put on the page, as SEPARATE values. plannedValue joins a multi-answer submission into one
+    // comma-separated string, and a review page shows the chosen options one per line, so comparing against the joined
+    // string can never match: SmartBook 11:11 PM Q5 submitted three cash-flow labels, the graded page showed all three
+    // with " correct" appended, and the run took it for a new question and planned it. A sequence keeps plannedValue's
+    // joined form on purpose -- splitting it would let any single item match, and there is no ordering review page to
+    // learn from yet. place_points has no text and drops out here as before.
+    submittedValues(task){const d=task.desired||{};
+      switch(task.operation){
+        case 'set_choice_set':return (d.labels||[]).map(norm).filter(Boolean);
+        default:{const v=norm(plannedValue(task));return v?[v]:[]}
+      }}
     submittedAnswerShownBack(obs){
-      const answers=[...new Set((this.current?.plan?.tasks||[]).filter(t=>this.current.completed?.[t.slot_key]).map(plannedValue).map(norm).filter(Boolean))];
-      if(!answers.length)return null;
-      for(const slot of obs.slots)for(const raw of [].concat(slot.current||[])){
-        const shown=norm(typeof raw==='string'?raw:'');if(!shown)continue;
-        for(const answer of answers)if(shown.length>answer.length&&shown.startsWith(answer))
-          return {answer,shown,slot_key:slot.slot_key};
+      const tasks=(this.current?.plan?.tasks||[]).filter(t=>this.current.completed?.[t.slot_key]);
+      for(const task of tasks){
+        const values=this.submittedValues(task);if(!values.length)continue;
+        // EVERY value of one task must be shown back, and within the SAME slot: on a review page the whole group is one
+        // slot whose current holds each chosen option. Requiring all of them is what keeps a genuinely new question that
+        // happens to arrive with one familiar option ticked from being read as a review and SKIPPED unanswered -- the
+        // only failure here that costs a mark rather than just stopping. A site that marks only some of the chosen
+        // answers is missed, which is no worse than before this existed.
+        for(const slot of obs.slots){
+          const seen=[].concat(slot.current||[]).map(raw=>norm(typeof raw==='string'?raw:'')).filter(Boolean);
+          if(!seen.length)continue;
+          const hits=values.map(value=>seen.find(shown=>shown.length>value.length&&shown.startsWith(value)));
+          if(hits.every(Boolean))return {answer:values[0],shown:hits[0],slot_key:slot.slot_key,values:values.length};
+        }
       }
       return null;
     }
