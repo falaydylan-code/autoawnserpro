@@ -1,0 +1,122 @@
+<!doctype html><meta charset="utf-8"><title>Question Mode: Multiple Choice Question</title>
+<style>
+ body{font:17px sans-serif;padding:24px}
+ label{display:block;margin:10px 0}
+ #confidence{margin-top:28px}
+ #confidence button{padding:8px 14px;margin-right:8px}
+ .reason{display:block;margin:4px 0 0 26px;color:#555;font-size:15px}
+ #after button{padding:9px 16px;margin-top:20px}
+</style>
+<!-- McGraw SmartBook as it leaked the answer key (2026-09-24 9:20 PM, 0.10.48). The question is answered, the
+     confidence bar submits it, and SmartBook then re-renders the SAME question in REVIEW mode. Three things about
+     that review page defeated every guard at once, and the fixture reproduces all three:
+       * the radio input is RENAMED (mcinput_..._XXX -> mcinput_..._scoring), so the harness cannot match the box
+         it recorded and "are my answers still in place" finds nothing;
+       * the marking is written INTO the option text ("...accounting equation correct") and as a "Reason: ..."
+         paragraph, never into [role=status], [role=alert], <output>, .feedback or .correct-answer -- so the
+         observation reports no feedback and an unknown grade;
+       * the heading changes, so the question key moves and the page looks like a new question.
+     The run therefore "advanced", planned the review page, and handed the model the revealed answer.
+     There is deliberately NO data-question-id: identity comes from the wording and the controls, as on the live page.
+     ?review=
+       marking   (default) the live shape: the chosen option gains " correct" and a Reason line appears
+       equal     the review page shows the answer back UNCHANGED -- no marking appended. Not caught by the
+                 begins-with-and-longer signal; pinned as a known limit.
+       prefilled submitting loads a genuinely NEW question that arrives PRE-SELECTED with the same option text as
+                 the previous answer. An equal match must NOT be read as a review, or a real question gets skipped.
+       none      submitting loads a genuinely new, unanswered question
+-->
+<main>
+  <h1 id="mode">Recharge Question Mode Multiple Choice Question</h1>
+  <p id="stem">Each transaction</p>
+  <div id="q"></div>
+  <div id="confidence">
+    Rate your confidence to submit your answer.
+    <button type="button" onclick="submit('High')">High Confidence</button>
+    <button type="button" onclick="submit('Medium')">Medium Confidence</button>
+    <button type="button" onclick="submit('Low')">Low Confidence</button>
+  </div>
+  <div id="after"></div>
+  <output id="banner" role="status"></output>
+</main>
+<script>
+const params = new URLSearchParams(location.search);
+const MODE = params.get('review') || 'marking';
+const ANSWER = 'has at least two effects on the basic accounting equation';
+const OPTIONS = [
+  'must always affect an asset and either a liability or stockholders’ equity account',
+  'affects both the chart of accounts and the accounting system',
+  'is both analyzed and summarized',
+  ANSWER,
+];
+const SECOND = ['records only cash movements', 'is posted once a year', ANSWER, 'requires a separate ledger'];
+window.clicks = [];
+window.planted = [];
+window.stage = 'question';
+
+function draw(options, group, marked, preselect) {
+  q.replaceChildren();
+  options.forEach((text, i) => {
+    const wrap = document.createElement('label');
+    const input = document.createElement('input');
+    input.type = 'radio';
+    input.name = group;
+    input.value = String(i);
+    if (preselect === text) input.checked = true;
+    wrap.append(input, document.createTextNode(' ' + text + (marked === text ? ' correct' : '')));
+    if (marked && i === 0) {
+      const why = document.createElement('span');
+      why.className = 'reason';
+      why.textContent = 'Reason: Each transaction must result in the accounting equation, A = L + SE, remaining equal. '
+        + 'It does not mean that every transaction has to affect both sides of the accounting equation.';
+      wrap.append(why);
+    }
+    q.append(wrap);
+  });
+}
+
+function chosen() {
+  // Index into the list actually on screen: the two lists overlap, so OPTIONS[i] would shadow SECOND[i].
+  const list = window.stage === 'second' ? SECOND : OPTIONS;
+  const hit = [...q.querySelectorAll('input:checked')].map(e => list[Number(e.value)]);
+  return hit[0] || null;
+}
+
+function submit(level) {
+  clicks.push(level);
+  const picked = chosen();
+  window.planted.push(picked);
+  // Second question answered: the assignment ends, so the run has somewhere to finish rather than
+  // being handed the same page twice.
+  if (window.stage === 'second') { finish(); return; }
+  if (MODE === 'prefilled') {          // a genuinely NEW question, pre-selected with the same text
+    window.stage = 'second';
+    mode.textContent = 'Recharge Question Mode Multiple Choice Question';
+    stem.textContent = 'A general journal entry';
+    draw(SECOND, 'mcinput_second_XXX', null, ANSWER);
+    return;
+  }
+  if (MODE === 'none') {               // a genuinely new, unanswered question
+    window.stage = 'second';
+    stem.textContent = 'A general journal entry';
+    draw(SECOND, 'mcinput_second_XXX', null, null);
+    return;
+  }
+  // review of the SAME question: heading changes, input renamed, marking written into the option text
+  window.stage = 'review';
+  mode.textContent = 'Answer Mode: Your Answer Correct';
+  draw(OPTIONS, 'mcinput_223bb90c_scoring', MODE === 'marking' ? picked : null, picked);
+  confidence.remove();
+  after.innerHTML = '<button type="button" onclick="finish()">Next Question</button>';
+}
+
+function finish() {
+  clicks.push('next');
+  window.stage = 'done';
+  q.replaceChildren();
+  after.replaceChildren();
+  banner.textContent = 'Assignment complete';
+}
+
+draw(OPTIONS, 'mcinput_223bb90c_XXX', null, null);
+</script>

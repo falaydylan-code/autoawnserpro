@@ -426,6 +426,27 @@
       const need=Math.min(3,verified.length);
       return seen>=need&&seen>0?{same:true,seen,of:verified.length}:{same:false,seen,of:verified.length,why:`only ${seen} of the ${verified.length} verified answers are visible`};
     }
+    // Our own answer, shown back to us with the site's marking added to it. SmartBook (2026-09-24 9:20 PM) answers a
+    // confidence submission by re-rendering the SAME question in review mode: it renames the input
+    // (mcinput_..._XXX -> _scoring) so answersStillInPlace never finds the box, and it writes the marking INTO the
+    // option text ("...accounting equation correct", "Reason: ...") rather than into any element the feedback
+    // selector reads, so feedback is empty and grade_state is unknown. Every signal the review guard depends on was
+    // blind, the run took the page for a new question, and the model was handed the revealed answer key.
+    // This signal needs neither the box key nor feedback markup: the page is showing a value that BEGINS WITH an
+    // answer we just submitted and is LONGER than it -- that extra text is the site's marking. Strictly longer
+    // matters: a genuinely new question that happens to arrive pre-selected with the same short answer (a True/False
+    // drill with a default) is an EQUAL match, not a longer one, and must fall through and be answered, because
+    // skipping it would cost a mark. A different answer, or no selection, is not this page and falls through too.
+    submittedAnswerShownBack(obs){
+      const answers=[...new Set((this.current?.plan?.tasks||[]).filter(t=>this.current.completed?.[t.slot_key]).map(plannedValue).map(norm).filter(Boolean))];
+      if(!answers.length)return null;
+      for(const slot of obs.slots)for(const raw of [].concat(slot.current||[])){
+        const shown=norm(typeof raw==='string'?raw:'');if(!shown)continue;
+        for(const answer of answers)if(shown.length>answer.length&&shown.startsWith(answer))
+          return {answer,shown,slot_key:slot.slot_key};
+      }
+      return null;
+    }
     matches(task,s){const d=task.desired;
       if(!TASK_OPERATION[s.kind]||TASK_OPERATION[s.kind]!==task.operation)return false;
       switch(task.operation){
@@ -1236,6 +1257,19 @@
                   // same box ids, no text), and moving each record there made every question overwrite the one before.
                   this.current.key=obs.question_key;
                   this.repin(obs);
+                }
+                // Second reading, for our own submissions only: the boxes may be unrecognisable and the marking may
+                // be invisible to the feedback selector, but the page can still be showing OUR answer back with the
+                // site's marking appended. That is the review of the question we just did. Recognising it here keeps
+                // the run on the same question, so the revealed page is never planned and never reaches the model;
+                // the loop then goes on to look for Next on this page instead of answering it again.
+                if(!kept.same&&action==='answer_submit'){
+                  const shown=this.submittedAnswerShownBack(obs);
+                  if(shown){
+                    await this.event('VERIFY',`This page is showing the submitted answer back with the site's marking added ("${shown.shown.slice(0,120)}"); it is the review of the same question, not a new one.`,{was:this.current.key,now:obs.question_key,submitted:shown.answer,shown_back:shown.shown.slice(0,200)});
+                    this.current.key=obs.question_key;
+                    this.repin(obs);
+                  }
                 }
               }
               if(obs.question_key!==this.current.key){
