@@ -1,0 +1,52 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>SmartBook matching</title>
+<!-- The markup SmartBook's matching question renders (learning.mheducation.com, chunk 48.926f0c2710f7a834.js): the OLD
+     react-beautiful-dnd attributes, cards whose visible text sits under aria-hidden with a 1px screen-reader copy beside
+     it, aria-label = the card's number, placeholders (draggables with no drag handle) left in the bank, and a mouse drag.
+     Every drop re-renders the widget from state, the way React does, so no element survives a move.
+     ?drop=never   the drag is ignored (a widget the harness cannot move)
+     ?extra=zone   a fourth zone whose prompt repeats the first one's (two zones with one prompt: nothing is claimed) -->
+<style>
+body{font:16px system-ui;margin:20px}.bank,.zone{min-height:44px;border:2px dashed #888;padding:6px;margin:6px 0;width:320px}
+.match-row{display:flex;gap:16px;align-items:center}.match-prompt{width:260px}
+.card{padding:8px;border:1px solid #333;background:#eef;cursor:grab;margin:2px 0}.placeholder{padding:8px;margin:2px 0;opacity:.3}
+._visuallyHidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+</style>
+<main>
+<div class="question"><p>Match each account to its financial statement classification.</p>
+<p class="instructions">Drag and drop each choice into the correct box. Each choice is used once.</p>
+<div id="widget"></div>
+<button id="submit" type="button">Submit</button></div>
+</main>
+<script>
+const params=new URLSearchParams(location.search);
+const cards=['Current asset','Long-term liability','Owner equity'];
+const prompts=['Accounts receivable','Bonds payable','Common stock'];
+if(params.get('extra')==='zone')prompts.push('Accounts receivable');
+window.placed=prompts.map(()=>null);window.drags=0;
+function render(){
+  const w=document.getElementById('widget');w.innerHTML='';
+  const bank=document.createElement('div');bank.className='bank';bank.setAttribute('data-react-beautiful-dnd-droppable','bank');
+  cards.forEach((c,i)=>bank.append(placed.includes(i)?placeholder(i):card(i)));
+  w.append(bank);
+  prompts.forEach((p,z)=>{const row=document.createElement('div');row.className='match-row';
+    const prompt=document.createElement('div');prompt.className='match-prompt';prompt.textContent=p;
+    const zone=document.createElement('div');zone.className='zone';zone.setAttribute('data-react-beautiful-dnd-droppable','zone-'+z);zone.dataset.zone=z;
+    if(placed[z]!==null)zone.append(card(placed[z]));
+    row.append(prompt,zone);w.append(row)});
+}
+function card(i){const d=document.createElement('div');d.className='card';d.setAttribute('data-react-beautiful-dnd-draggable','0');
+  d.setAttribute('data-react-beautiful-dnd-drag-handle','0');d.tabIndex=0;d.setAttribute('role','button');d.setAttribute('aria-label',String(i+1));d.dataset.card=i;
+  d.innerHTML='<div class="_visuallyHidden">Choice '+(i+1)+' of '+cards.length+'</div><div aria-hidden="true" class="choice-item draggableItem"><div class="content">'+cards[i]+'</div></div>';
+  return d}
+function placeholder(i){const d=document.createElement('div');d.className='placeholder';d.setAttribute('data-react-beautiful-dnd-draggable','0');
+  d.innerHTML='<div aria-hidden="true" class="choice-item"><div class="content">'+cards[i]+'</div></div>';return d}
+let held=null,start=null,moved=false;
+document.addEventListener('mousedown',e=>{const c=e.target.closest('[data-react-beautiful-dnd-drag-handle]');if(!c)return;held=Number(c.dataset.card);start=[e.clientX,e.clientY];moved=false});
+document.addEventListener('mousemove',e=>{if(held!==null&&Math.hypot(e.clientX-start[0],e.clientY-start[1])>5)moved=true});
+document.addEventListener('mouseup',e=>{if(held===null)return;const c=held;held=null;if(!moved||params.get('drop')==='never')return;
+  const zone=document.elementsFromPoint(e.clientX,e.clientY).map(n=>n.closest?.('[data-zone]')).find(Boolean);if(!zone)return;
+  const z=Number(zone.dataset.zone),from=placed.indexOf(c);window.drags++;
+  if(from>=0)placed[from]=null;placed[z]=c;render()});
+document.getElementById('submit').onclick=()=>{window.submitted=true};
+render();
+</script></html>

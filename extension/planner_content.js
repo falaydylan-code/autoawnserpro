@@ -114,6 +114,36 @@
     if(exclude.has(n)||!visible(n)||(!choice&&n.matches('button'))||n.matches(textAlways)||(n.matches(modeWords)&&!holdsAnswer(n))||n.matches(resultIcon)||liveFeedback(n))return;
     if(n.matches('input,textarea,select'))return;for(const c of n.childNodes)walk(c);if(n.shadowRoot)for(const c of n.shadowRoot.childNodes)walk(c)};walk(root);return {text:norm(parts.join(' ')),complete};}
   function choiceLabel(e,container=null){let branch=e;while(container&&branch.parentElement&&branch.parentElement!==container)branch=branch.parentElement;const visible=renderedText(branch,new Set(),true).text,accessible=norm(e.getAttribute('aria-label')||e.getAttribute('title')||'');return visible&&accessible&&visible!==accessible&&!visible.includes(accessible)?accessible+' — '+visible:visible||accessible;}
+  // Drag-and-drop matching (SmartBook's matching question, 2026-09-24 9:17 PM: zero slots, because it is the OLD
+  // react-beautiful-dnd -- data-react-beautiful-dnd-droppable/-draggable/-drag-handle -- and only v12's
+  // data-rbd-droppable-id was known). Each drop zone beside its own prompt is offered as an ordinary pick-one:
+  // label = its prompt, options = every card's text, current = the card now in it. Entering it is a drag the runtime
+  // performs and then reads back from the zone. Rules, all structural:
+  //  * a card is a draggable that carries a drag handle; a placeholder left behind is a draggable without one;
+  //  * a card's text is what a person sees -- this widget puts it under aria-hidden and a 1px screen-reader copy
+  //    beside it, so read on-screen text and skip anything 1px or smaller;
+  //  * a zone holds at most one card and has its own non-empty prompt: the nearest ancestor that contains it and
+  //    no other droppable, read outside the zone; the prompts' rows must repeat (same tag and class), which leaves
+  //    the card bank out even when it is down to one card or none;
+  //  * fewer than two zones, a card with no text, or two zones with one prompt claims nothing (today's behaviour).
+  const dropSel='[data-react-beautiful-dnd-droppable],[data-rbd-droppable-id]',dragSel='[data-react-beautiful-dnd-draggable],[data-rbd-draggable-id]',handleSel='[data-react-beautiful-dnd-drag-handle],[data-rbd-drag-handle-draggable-id]';
+  const readable=e=>{if(!onScreen(e))return false;const r=e.getBoundingClientRect();return r.width>1&&r.height>1};
+  function discoverMatching(root){
+    const drops=all(root,dropSel).filter(shown);if(drops.length<2)return null;
+    const cardsIn=d=>all(d,dragSel).filter(c=>shown(c)&&(c.matches(handleSel)||!!c.querySelector(handleSel))&&c.closest(dropSel)===d);
+    const cards=drops.flatMap(d=>cardsIn(d).map(el=>({el,label:renderedText(el,new Set(),true,readable).text})));
+    if(!cards.length||cards.some(c=>!c.label))return null;
+    const rows=new Map();
+    for(const d of drops){const inside=cardsIn(d);if(inside.length>1)continue;
+      for(let a=d.parentElement,depth=0;a&&root.contains(a)&&depth<6;a=a.parentElement,depth++){
+        if(drops.some(o=>o!==d&&a.contains(o)))break;
+        const prompt=renderedText(a,new Set([d])).text;if(!prompt)continue;
+        const shape=a.tagName+'.'+[...a.classList].sort().join('.');if(!rows.has(shape))rows.set(shape,[]);
+        rows.get(shape).push({zone:d,prompt,card:inside[0]?cards.find(c=>c.el===inside[0]):null});break;}}
+    const repeated=[...rows.values()].filter(z=>z.length>=2);
+    if(repeated.length!==1||new Set(repeated[0].map(z=>z.prompt)).size!==repeated[0].length)return null;
+    return {drops,cards,zones:repeated[0]};
+  }
   function discoverChoices(root,known){
     // A candidate is evidence, not permission to click. Never infer an answer group from the whole page.
     // Page chrome never holds an answer: site header/footer/nav (Khan's share buttons sit in <header>, its exercise
@@ -428,8 +458,17 @@
     // A sheet's floating editor is a representation of its cell, not a new slot
     // or question. Keep identity stable when it appears, moves, or disappears.
     if(cells.some(sheetCell))elements=elements.filter(e=>!e.matches('textarea.jSheetControls_formula,textarea.jSheetInPlaceEdit'));
-    const discovered=discoverChoices(root,elements),candidateMembers=discovered.flatMap(g=>g.members);
-    const excluded=new Set([...elements.filter(e=>!['radio','checkbox'].includes(e.type)&&!e.matches('[role=radio],[role=checkbox]')),...candidateMembers]);
+    // Matching zones are claimed BEFORE candidate discovery: every drag handle is tabindex=0, and left to
+    // discoverChoices the cards would form a bogus pick-one group. A claimed droppable is not also an ordering, and
+    // every droppable stays out of the question text, so a card moving from the bank to a zone changes no identity.
+    const matching=discoverMatching(root),matched=matching?[...matching.drops,...matching.cards.map(c=>c.el)]:[];
+    if(matching)elements=elements.filter(e=>!matching.drops.includes(e));
+    // A zone is named by its place among the zones, not by the element: the widget redraws itself from state on every
+    // drop, so the element that held a zone before the drag may not be the one holding it after, and a slot the
+    // runtime just filled must still be found under the same key. A site id on the zone still wins (key() reads it first).
+    if(matching)matching.zones.forEach((z,i)=>nodes.set(z.zone,'match:'+i));
+    const discovered=discoverChoices(root,[...elements,...matched]),candidateMembers=discovered.flatMap(g=>g.members);
+    const excluded=new Set([...elements.filter(e=>!['radio','checkbox'].includes(e.type)&&!e.matches('[role=radio],[role=checkbox]')),...candidateMembers,...(matching?matching.drops:[])]);
     // Parts. A tab strip inside the question root (the ARIA tab pattern: role=tab, aria-selected, aria-controls) means
     // the question has several separately answered parts and only the selected one is visible. Each tab is reported
     // as a part; the runtime reveals the others by clicking them, one at a time, and observes each while it is visible.
@@ -552,6 +591,10 @@
     }
     for(const [gid,es] of groups){const group=es[0].closest('fieldset,[role=radiogroup],[role=group]')||es[0];const s=add(group,gid.startsWith('radio')?'choice':'choice_set',name(group)||'Choose',es.map(name),es.filter(e=>e.checked||e.getAttribute('aria-checked')==='true').map(name));
       s.slot_key=question_key+'/'+(parts.length&&partFor(group)?partFor(group).slice(5)+'/':'')+gid;s.choices=es.map(e=>({label:name(e),target:target(e),checked:!!e.checked||e.getAttribute('aria-checked')==='true',disabled:!!e.disabled||e.getAttribute('aria-disabled')==='true'}));}
+    if(matching){const options=[...new Set(matching.cards.map(c=>c.label))].sort();
+      for(const z of matching.zones){const s=add(z.zone,'selection',z.prompt,options,z.card?.label||'');
+        s.interaction={adapter:'drag_match',evidence:{widget:'drag_and_drop_matching',rule:'Each card goes into one drop zone and can sit in only one zone at a time.'}};
+        s.cards=matching.cards.map(c=>({label:c.label,target:target(c.el)}));}}
     // A group classified as a tool row or as page chrome is never offered as an answer slot. It is still a
     // candidate, so its text stays out of the question stem, and the reason is recorded for the log.
     const suppressed_groups=discovered.filter(g=>g.tool).map(g=>({reason:g.tool,labels:g.labels.slice(0,8)}));
@@ -575,7 +618,7 @@
     // buttons turned every dropdown-opening arrow INSIDE a response cell into an "unknown" navigation candidate --
     // twenty of them on one sheet, which is both wrong and enough extra payload to push the observation past its
     // 100 KB limit mid-run. Containment, not equality: the opener sits inside the cell, it is not the cell.
-    const ownedByAnswer=e=>e.closest(answerCells)||e.closest('[role=listbox],[role=option]')
+    const ownedByAnswer=e=>e.closest(answerCells)||e.closest('[role=listbox],[role=option]')||matched.some(m=>m===e||m.contains(e))
       ||slots.some(s=>{const el=targets.get(s.target);return el===e||!!el?.contains(e)||!!s.choices?.some(c=>{const ce=targets.get(c.target);return ce===e||!!ce?.contains(e)})});
     const navigation=all(document,'button,a,[role=button],input[type=submit],input[type=button]').filter(e=>shown(e)&&safe(e)&&!ownedByAnswer(e)).map(e=>{
       const info=navigationInfo(e);
@@ -595,7 +638,7 @@
     // drive, and a blind click on coursework is not worth the part it might reveal.
     const candidate_parts=parts.length>=2?[]:(()=>{
       const pool=all(root,'button,[role=button],input[type=button],[tabindex]').filter(e=>shown(e)&&safe(e)
-        &&!e.matches('a[href],[role=tab],input[type=submit],input[type=reset],textarea,select,'+answerCells)&&!e.closest('a[href]')&&!elements.includes(e)&&!e.closest(textExcluded)
+        &&!e.matches('a[href],[role=tab],input[type=submit],input[type=reset],textarea,select,'+answerCells)&&!e.closest('a[href]')&&!elements.includes(e)&&!matched.some(m=>m===e||m.contains(e))&&!e.closest(textExcluded)
         &&!forbidden.test(name(e))&&!navigationKind(name(e)||norm(e.value)||'')&&partLabel.test(name(e)||norm(e.value)||''));
       const groups=new Map();
       for(const e of pool){const p=e.parentElement;if(!p)continue;if(!groups.has(p))groups.set(p,[]);groups.get(p).push(e)}
