@@ -1,0 +1,96 @@
+<!doctype html><meta charset="utf-8"><title>Exercise with a course pager beside the answers</title>
+<style>
+ body{font:16px sans-serif;margin:0}
+ main{display:grid;grid-template-columns:260px 1fr;gap:24px;padding:16px;align-items:start}
+ #sidebar{border:1px solid #ddd;padding:10px}
+ #pager{display:flex;align-items:center;gap:8px;justify-content:space-between}
+ #pager button{padding:4px 10px}
+ #qbox{max-width:620px}
+ .opt{display:block;width:100%;text-align:left;padding:12px;margin:6px 0;border:1px solid #bbb;background:#fff}
+ .opt[aria-pressed=true]{border-color:#1865f2;color:#1865f2}
+ .ltr{display:inline-block;width:24px;height:24px;border:1px solid #999;border-radius:50%;text-align:center;margin-right:8px}
+</style>
+<!-- Khan Academy as it stopped the run (2026-09-24 7:34 PM, 0.10.47). The answer was chosen correctly (Choice D),
+     verified by DOM and by screenshot, and the question then ended QUESTION_INCOMPLETE because the LEFT SIDEBAR's
+     course pager -- two plain buttons, "Previous in course" and "Next in course" -- had been discovered as a
+     candidate answer group, could not be classified, and an unresolved leftover fails the finish gate.
+     The pager is deliberately NOT inside <nav> or <aside>: on the live page it was discovered, so it cannot sit in a
+     container the pool already excludes. Its own scope text is just the lesson title, which is why the page says
+     neither pick-one nor pick-many for it and it stays unresolved; the answers' scope says "Choose 1 answer:".
+     There is no data-question-id, as on the live page, so the root is <main>.
+     ?pager=
+       wrapped  (default) "Previous in course" / "Next in course" -- only the first is a recognised workflow word
+       plain    "Previous" / "Next" -- both recognised without stripping anything
+       unworded "Forward in course" / "Backward in course" -- NEITHER word is in the vocabulary. This one is NOT
+                suppressed, on purpose: it documents the limit of a word-based rule and is why the finish gate must
+                not treat a group the harness merely guessed at as an unanswered control.
+       marked   the pager buttons carry aria-pressed, i.e. the page marks them up as answer controls -- kept
+       none     no pager
+     ?answers=opposite  the five options become "Previous year"/"Next year"/... so a real answer group reads as
+                        workflow after stripping; markup (aria-pressed) is what must keep it.
+-->
+<main>
+  <div id="sidebar">
+    <div>Course: AP®︎/College Macroeconomics &gt; Unit 5</div>
+    <div id="pager"></div>
+  </div>
+  <div id="qbox">
+    <h2>Economic growth</h2>
+    <p id="stem">Which of the following statements best describes economic growth?</p>
+    <p>Choose 1 answer:</p>
+    <div id="choices"></div>
+  </div>
+</main>
+<script>
+const p = new URLSearchParams(location.search);
+const STANDARD = [
+  'Any increase in nominal GDP per capita over time',
+  'Any increase in real GDP',
+  'Any increase in nominal GDP',
+  'A sustained increase in real GDP per capita over time',
+  'Any sustained increase in inflation over time',
+];
+const OPPOSITE = ['Previous year', 'Next year', 'Previous quarter', 'Next quarter', 'Previous decade'];
+const OPTIONS = p.get('answers') === 'opposite' ? OPPOSITE : STANDARD;
+window.picked = [];
+window.paged = [];
+
+OPTIONS.forEach((text, i) => {
+  const letter = 'ABCDE'[i];
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'opt';
+  b.setAttribute('aria-pressed', 'false');
+  b.setAttribute('aria-label', '(Choice ' + letter + ')');
+  b.innerHTML = '<span class="ltr">' + letter + '</span>';
+  b.append(text);
+  b.onclick = () => {
+    for (const o of choices.querySelectorAll('.opt')) o.setAttribute('aria-pressed', 'false');
+    b.setAttribute('aria-pressed', 'true');
+    window.picked = [text];
+  };
+  choices.append(b);
+});
+
+const MODE = p.get('pager') || 'wrapped';
+const LABELS = {
+  wrapped: ['Previous in course', 'Next in course'],
+  plain: ['Previous', 'Next'],
+  unworded: ['Forward in course', 'Backward in course'],
+  marked: ['Previous in course', 'Next in course'],
+}[MODE];
+if (LABELS) {
+  const [before, after] = LABELS;
+  for (const text of [before, 'Lesson 6: Economic growth', after]) {
+    if (text.startsWith('Lesson')) { pager.append(Object.assign(document.createElement('span'), {textContent: text})); continue; }
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = text;
+    if (MODE === 'marked') b.setAttribute('aria-pressed', 'false');
+    b.onclick = () => window.paged.push(text);
+    pager.append(b);
+  }
+} else {
+  sidebar.remove();
+}
+</script>

@@ -203,9 +203,19 @@
     //    navigationKind) plus the auxiliary words, never a third list. Markup outranks any label: a member the page
     //    marks up as an answer control keeps its group, so a real option that happens to read "Feedback" is safe.
     const auxiliaryGroup=/^(?:(?:show|hide|toggle|get|see|view|open|read)\s+)?(?:an?\s+|the\s+)?(?:hint|feedback|explanation|solution|bookmark|sound|audio|mute|settings|help|favorite|draw|start over|skip|report|share|flag)\b/i;
+    const workflowLabel=l=>{const t=norm(l);return !!t&&(chromeLabel.test(t)||!!navigationKind(t)||auxiliaryGroup.test(t))};
     for(const g of found){
       if(g.tool||g.members.some(e=>e.matches('[role=radio],[role=checkbox],[aria-pressed]')))continue;
-      if(g.labels.every(l=>{const t=norm(l);return !!t&&(chromeLabel.test(t)||!!navigationKind(t)||auxiliaryGroup.test(t))}))g.tool='every label is a workflow or auxiliary control';
+      // A known control wrapped in the site's own wording is still that control. Khan's sidebar pager (2026-09-24
+      // 7:34 PM) is "Previous in course" / "Next in course": the first is recognised, the second is not, because the
+      // advance pattern matches a whole label and not a phrase inside one. The pair was offered as an answer group,
+      // stayed unresolved, and ended a correctly answered question. So strip the phrase the group's labels share --
+      // the same helper the mirror rule above uses -- and test what is left. That recognises the wrapper without
+      // putting the wrapper's wording into any list. It does NOT make this rule vocabulary-free: a pager whose words
+      // are absent from the list ("Forward"/"Backward"), or whose labels share no phrase at all, still gets through,
+      // which is why the finish gate must not treat a group the harness merely guessed at as an unanswered control.
+      if(g.labels.every(workflowLabel)||(g.labels.length>1&&g.labels.every(Boolean)&&residuals(g.labels).some(r=>r.every(workflowLabel))))
+        g.tool='every label is a workflow or auxiliary control';
     }
     found.complete=pool.length<=400;return found;
   }
