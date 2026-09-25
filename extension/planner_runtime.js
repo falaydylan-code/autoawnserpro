@@ -502,6 +502,23 @@
         if(!sameValue(before.value,typed)){await this.key('Escape');throw new Fault('INPUT_NO_EFFECT','Editor did not hold the planned value; edit cancelled, nothing committed.',{typed,editor:String(before.value??'')})}
         // Blur through Tab, never Enter (which can submit a form).
         await this.key('Tab');
+      }else if(task.operation==='set_selection'&&s.interaction?.adapter==='drag_match'){
+        // A matching question's drop zone is offered to the model as an ordinary pick-one slot: "for this prompt, which
+        // card?". Entering it is a drag, not a menu: the named card is dragged onto this zone with a real mouse gesture
+        // (the widget listens for mouse down / move / up), then the zone itself is read back -- it must now hold exactly
+        // that card. Nothing is inferred from the gesture; the zone's own contents are the readback.
+        for(let attempt=0;attempt<2;attempt++){
+          obs=await this.observe();s=this.slot(obs,task.slot_key);if(this.matches(task,s))break;
+          const cards=(s.cards||[]).filter(c=>norm(c.label)===norm(d.label));
+          if(cards.length!==1)throw new Fault(cards.length?'TARGET_AMBIGUOUS':'OPTION_MISSING',cards.length?'More than one card carries the planned text.':'No draggable card carries the planned text.',d.label);
+          await this.measure(s.frame,s.target);const from=await this.measure(s.frame,cards[0].target),to=await this.measure(s.frame,s.target);
+          await this.guard();
+          await AssignmentVisual.input(this.tabId,{x:from.viewport.x+from.viewport.w/2,y:from.viewport.y+from.viewport.h/2},{x:to.viewport.x+to.viewport.w/2,y:to.viewport.y+to.viewport.h/2},()=>this.cancelled||this.b.stopped());
+          const until=Date.now()+LIMITS.ui;let placed=false;
+          do{await sleep(150);obs=await this.observe();s=this.slot(obs,task.slot_key);if(this.matches(task,s)){placed=true;break}}while(Date.now()<until);
+          if(placed)break;
+          if(attempt)throw new Fault('INPUT_NO_EFFECT','The card did not land in its drop zone.',s.current);
+        }
       }else if(task.operation==='set_selection'){
         if(s.native){
           await this.click(s.frame,s.target,this.answerClick(task,s,'focus_native_select','Focus the native dropdown; keyboard input will choose the planned label.'));await this.key('Escape');let m=await this.inspect(s.frame,s.target);
@@ -832,6 +849,10 @@
       // A discovered group the model was SHOWN and chose to leave alone is a decision, not a gap: remember it, so the
       // round loop below does not re-offer it as "an answer control that appeared after the planned answers" and ask
       // again -- the model skips it again, the plan comes back empty, and the run dies on its own correct answer.
+      // One card, one zone. A matching card sits in only one drop zone at a time, so a plan that names the same card
+      // for two zones would drag it twice and the second drag would empty the first zone. Refused before any drag.
+      {const seen=new Set();for(const t of tasks){const s=obs.slots.find(x=>x.slot_key===t.slot_key);if(s?.interaction?.adapter!=='drag_match'||t.operation!=='set_selection')continue;
+        const card=norm(t.desired?.label);if(seen.has(card))throw new Fault('GUARD_REJECTED','One matching card was planned for two drop zones; each card fits one zone.',t.desired?.label);seen.add(card);}}
       if(!failed&&this.current){const skipped=resolved.filter(s=>s.interaction?.adapter==='candidate_choices'&&!keys.has(s.slot_key)).map(s=>s.slot_key);
         if(skipped.length)this.current.optionalSkipped=[...new Set([...(this.current.optionalSkipped||[]),...skipped])];}
       for(const t of tasks){const s=this.slot(obs,t.slot_key);if(this.modeAssertable(s)){if(!['choose_one','set_choice_set'].includes(t.operation))throw new Fault('GUARD_REJECTED','A candidate choice group takes choose_one or set_choice_set only.');continue}if(!allowed[s.kind]||allowed[s.kind]!==t.operation)throw new Fault('GUARD_REJECTED','Task operation does not match the slot.');}
