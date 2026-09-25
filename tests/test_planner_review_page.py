@@ -34,9 +34,9 @@ from test_ordering_visual import navigate
 ANSWER = 'has at least two effects on the basic accounting equation'
 
 
-def run(worker, tid, config=None):
+def run(worker, tid, config=None, multi=()):
     """Scripted planner: answer the accounting option, then let the model pick Medium Confidence as answer_submit."""
-    return worker.evaluate('''async ({id,config,answer})=>{
+    return worker.evaluate('''async ({id,config,answer,multi})=>{
       const h=__assignmentHarness;await AssignmentVisual.detach();await AssignmentVisual.attach(id);
       const bridge=h.plannerBridge();
       bridge.config=async()=>({advance:true,check_work:true,auto_submit:false,spend_limit:3,model:'test',...config});
@@ -51,6 +51,13 @@ def run(worker, tid, config=None):
             reason:'Medium reflects the supplied pre-submission reasoning.'}};
         }
         const o=body.observation;
+        if(multi.length){
+          const slot=o.slots.find(s=>s.kind==='choice_set')||o.slots[0];
+          const labels=multi.map(m=>(slot.options||[]).find(x=>x.includes(m))).filter(Boolean);
+          return {cost:.001,response:{kind:'plan',question_key:o.question_key,observation_id:o.observation_id,
+            tasks:[{task_id:'t1',slot_key:slot.slot_key,operation:'set_choice_set',desired:{labels},depends_on:[]}],
+            reason:'These three are the cash flow categories.',parts_declared:1}};
+        }
         const slot=o.slots.find(s=>(s.options||[]).some(x=>x.includes(answer)))||o.slots[0];
         const label=(slot.options||[]).find(x=>x.includes(answer));
         return {cost:.001,response:{kind:'plan',question_key:o.question_key,observation_id:o.observation_id,
@@ -62,7 +69,7 @@ def run(worker, tid, config=None):
       return {status:r.status,events:r.events.map(e=>({detail:e.detail,failure_code:e.failure_code||null})),
         plans:calls.filter(c=>c.phase==='plan').map(c=>JSON.stringify(c.body.observation)),
         phases:calls.map(c=>c.phase)};
-    }''', dict(id=tid, config=config or {}, answer=ANSWER))
+    }''', dict(id=tid, config=config or {}, answer=ANSWER, multi=list(multi)))
 
 
 def details(result):
@@ -131,3 +138,31 @@ def test_a_genuinely_new_question_still_advances_and_is_planned(extension):
     assert len(result['plans']) == 2, details(result)[-4:]
     assert result['status'] == 'completed', details(result)[-4:]
     assert page.evaluate('window.stage') == 'done'
+
+
+# --- multi-select: the 11:11 PM Q5 shape --------------------------------------------------------------
+
+MULTI = ['cash flows from financing activities', 'cash flows from investing activities',
+         'cash flows from operating activities']
+
+
+def test_a_multi_select_review_page_is_recognised_and_never_planned(extension):
+    """Three answers submitted at once. The harness records them as ONE comma-joined string, while the review page
+    shows them one per option with ' correct' appended -- so comparing against the joined string never matched and
+    the graded page was planned. Each submitted label is now compared on its own."""
+    page, w, tid = navigate(extension, 'smartbook_review.html?type=multi')
+    result = run(w, tid, multi=MULTI)
+    assert not leaked(result), 'the revealed answer key reached the model: ' + leaked(result)[0][:400]
+    assert len(result['plans']) == 1, 'the review page was planned as a new question'
+    assert any('showing the submitted answer back' in d for d in details(result)), details(result)[-4:]
+    assert page.evaluate('window.planted') == [MULTI]
+
+
+def test_a_multi_select_review_page_only_partly_marked_is_not_a_review(extension):
+    """EVERY submitted answer has to come back longer. If a site marks only some of them, this is not proven to be
+    our graded page and we fall through to the existing guard -- no worse than before the signal existed, and it is
+    what stops one familiar option being enough to call a page a review."""
+    page, w, tid = navigate(extension, 'smartbook_review.html?type=multi&mark=partial')
+    result = run(w, tid, multi=MULTI)
+    assert not any('showing the submitted answer back' in d for d in details(result))
+    assert page.evaluate('window.planted') == [MULTI]      # the answers were still entered correctly
