@@ -261,3 +261,61 @@ def test_graded_pages_that_read_alike_do_not_overwrite_each_others_record(extens
     assert len(details(result, 'The graded page reads differently')) == 3
     assert result['questions'] == 3, 'graded pages that read alike merged three questions into one record'
     assert page.evaluate('window.answers') == {'1': '42', '2': '42', '3': '42'}
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# After our own Check, a graded view with NO answer controls left is the question we just checked (0.10.50)
+#
+# McGraw Ch.3 Q2 (2026-09-24 11:09 PM, 0.10.49): four answers entered and verified, Check pressed, and the run died
+# "Check replaced the page's document but it did not settle within 15 s". Reproduced on the study copy: the tool reloads
+# its frame into a read-only review sheet -- td.responseCell 4 -> 0, verdict in div.correctAnswer_progressbar, which no
+# feedback rule reads -- so the wait for "answer controls back, or locked/complete" could never end. Such a page is now
+# accepted when a reloaded frame repeats the question's wording, or (its text erased by the page-mode rule) when it
+# still shows a table unchanged for 4 s. Nothing is planned on it; the run goes on to Next.
+# ---------------------------------------------------------------------------------------------------------------
+
+
+def graded_view(result):
+    return details(result, 'The graded page shows no answer boxes')
+
+
+def test_a_read_only_graded_sheet_is_the_question_just_checked(extension):
+    page, w, tid = navigate(extension, 'transitions.html?check=readonly&bare=1')
+    result = run(w, tid)
+    assert result['status'] == 'finished', result['events'][-3:]
+    assert result['questions'] == 3 and not stale(result)
+    assert page.evaluate('window.clicks') == ['check', 'next', 'check', 'next', 'check']
+    seen = graded_view(result)
+    assert len(seen) == 3 and all("repeats the question's wording" in e['detail'] for e in seen), [e['detail'] for e in seen]
+    assert len(result['bodies']) == 3                                               # the graded sheets were never planned
+
+
+def test_a_graded_sheet_whose_text_was_erased_is_accepted_by_its_table(extension):
+    """Without McGraw's hidden helper textarea, pregrade-mode erases the frame's text to its title; its table remains."""
+    page, w, tid = navigate(extension, 'transitions.html?check=readonlyerased&bare=1')
+    result = run(w, tid)
+    assert result['status'] == 'finished', result['events'][-3:]
+    assert result['questions'] == 3 and not stale(result)
+    seen = graded_view(result)
+    assert len(seen) == 3 and all('its table unchanged for 4 s' in e['detail'] for e in seen), [e['detail'] for e in seen]
+
+
+def test_a_brief_loading_screen_is_not_taken_for_the_graded_view(extension):
+    for mode in ['spinner', 'slowspinner']:                                          # 1 s, and longer than the 4 s hold
+        page, w, tid = navigate(extension, 'transitions.html?bare=1&check=' + mode)
+        result = run(w, tid)
+        assert result['status'] == 'finished', (mode, result['events'][-3:])
+        assert result['questions'] == 3 and not stale(result), mode
+        assert not graded_view(result), mode                                         # the real graded page, boxes and all
+
+
+def test_a_frame_that_stays_blank_after_check_stops_and_says_what_it_saw(extension):
+    page, w, tid = navigate(extension, 'transitions.html?check=emptyforever&bare=1')
+    result = run(w, tid)
+    assert result['status'] == 'needs_review'
+    stop = result['events'][-1]
+    assert stop['failure_code'] == 'INPUT_NO_EFFECT' and 'did not settle' in stop['detail'], stop
+    look = stop['failure_data']['last_look']
+    assert look['answer_controls'] == 0 and look['document_moved'] and look['reloaded_frame_tables'] == [0], look
+    assert page.evaluate('window.clicks') == ['check']                              # never pressed Next past it
+

@@ -49,6 +49,29 @@
   // question's own text had moved too -- the 12:10 AM Ch.3 log said only "frames", and nobody could tell whether
   // that was the whole story. Frames are matched by their own fingerprint; position is a fallback used only to
   // describe a difference, never to decide anything.
+  // The graded view of a question some sites reload into after Check has NO answer controls left: McGraw's accounting
+  // tool redraws its sheet read-only (table.jSheet.review, plain cells, 0 td.responseCell) and writes its verdict where
+  // no feedback rule looks (Ch.3 Q2, 2026-09-24 11:09 PM, 0.10.49, reproduced on the study copy). Two readings say a
+  // controls-less page is that graded view and not a reload in progress:
+  //  * wording -- a frame on a NEW document reads like the text the question frames held before the Check (the graded
+  //    sheet repeats the question's rows; a blank or "Loading..." frame does not). Only frames on new documents count:
+  //    the shell around the question still shows the stem through any reload, so it proves nothing.
+  //  * held -- a reloaded frame that still shows a table, unchanged for GRADED_VIEW_HOLD (live, the mid-reload blank
+  //    lasted up to ~2 s; the hold is above it). It exists because the page-mode rule can erase a graded frame's text
+  //    down to its title, and then the wording has nothing to compare -- but the graded sheet is still a table. A blank
+  //    or "Loading..." frame has none, however long it lingers, so it runs out the wait and the stop says what it saw.
+  const GRADED_VIEW_HOLD=4000;
+  const words=t=>new Set((norm(t).toLowerCase().match(/[a-z0-9][a-z0-9$,.'\u2019-]{2,}/g)||[]));
+  const reloadedFrames=(fresh,before)=>{const docs=new Set(before.frames.map(f=>f.document_id));return fresh.frames.filter(f=>!docs.has(f.document_id))};
+  const readsLikeQuestion=(fresh,before)=>{
+    const was=words(before.frames.filter(f=>before.slots.some(s=>s.frame_id===f.frame_id)).map(f=>f.question).join(' '));
+    if(was.size<4)return false;
+    return reloadedFrames(fresh,before).some(f=>{const now=words(f.question);let shared=0;for(const w of was)if(now.has(w))shared++;return shared>=4&&shared/was.size>=.5});
+  };
+  // What the last look saw, so a wait that runs out says why instead of just "did not settle".
+  const lastLook=(obs,before)=>obs?{answer_controls:obs.slots.length,page_state:obs.page_state,feedback:!!obs.feedback,question_characters:obs.question.length,
+    frame_text_characters:obs.frames.map(f=>(f.question||'').length),document_moved:obs.document_id!==before.document_id,frames_excluded:obs.frames_excluded||0,reloaded_frame_tables:reloadedFrames(obs,before).map(f=>f.tables?.length||0),
+    ...(obs.question_key!==before.question_key?{identity_moved:identityMovers(before.identity,obs.identity)}:{})}:null;
   const identityMovers=(was,now)=>{if(!was?.detail||!now?.detail)return 'unknown';
     const moved=[];if(was.frames.join()!==now.frames.join())moved.push(`frames ${JSON.stringify(was.frames)} -> ${JSON.stringify(now.frames)}`);
     for(const [i,a] of was.detail.entries()){const b=now.detail.find(d=>d.frame===a.frame)||now.detail[i];if(!b)continue;
@@ -194,7 +217,7 @@
         enumeration:frames.find(f=>f.enumeration)?.enumeration||null,
         page_state:frames.find(f=>f.page_state!=='answering')?.page_state||'answering',host:frames[0].host,
         navigation:frames.flatMap(f=>f.navigation.map(n=>({...n,frame:f}))),navigation_complete:frames.every(f=>f.navigation_complete!==false)&&frames.reduce((sum,f)=>sum+f.navigation.length,0)<=60,feedback:frames.map(f=>f.feedback).filter(Boolean).join('; '),
-        grade_state:frames.find(f=>f.grade_state!=='unknown')?.grade_state||'unknown',save_state:frames.some(f=>f.save_state==='pending')?'pending':frames.some(f=>f.save_state==='confirmed')?'confirmed':'unavailable',visual:frames.some(f=>f.visual)};
+        frames_excluded:excluded,grade_state:frames.find(f=>f.grade_state!=='unknown')?.grade_state||'unknown',save_state:frames.some(f=>f.save_state==='pending')?'pending':frames.some(f=>f.save_state==='confirmed')?'confirmed':'unavailable',visual:frames.some(f=>f.visual)};
       // Without the frame number, two question areas that are truly identical -- same address, same text, same answer
       // layout -- name their answers the same way. That is a real ambiguity, not a bug to paper over: stop and say so.
       if(new Set(slots.map(s=>s.slot_key)).size!==slots.length)throw new Fault('TARGET_AMBIGUOUS','Two question areas on this page look identical (same address, text and answer layout); the harness will not guess which is which.');
@@ -1242,9 +1265,22 @@
               // Settled = the page responded (feedback, state, key or document moved) AND it is readable again (answer
               // controls back, or locked/complete): a reloaded frame that shows its stem before its inputs is not the
               // graded page yet. A frame the site re-created rather than reloaded then shows up as a key change (frames).
-              const settled=await this.settle(action,obs,(fresh,before)=>(fresh.feedback!==before.feedback||fresh.page_state!==before.page_state||fresh.question_key!==before.question_key||fresh.document_id!==before.document_id||
-                (action==='answer_submit'&&fresh.navigation.some(n=>n.kind==='advance'&&!n.disabled&&!before.navigation.some(p=>p.kind==='advance'&&!p.disabled))))&&(fresh.slots.length>0||fresh.page_state!=='answering'));
-              if(!settled.settled)throw new Fault('INPUT_NO_EFFECT',settled.replaced?`Check replaced the page's document but it did not settle within ${LIMITS.navigation/1000} s. It will not be repeated.`:'Check produced no new feedback. It will not be repeated.');
+              // A third way to be readable, after our own Check only: the graded view with no answer controls left (see
+              // readsLikeQuestion / GRADED_VIEW_HOLD above). gradedView records which reading accepted it.
+              let gradedView=null,emptySince=0,emptySignature=null;
+              const settled=await this.settle(action,obs,(fresh,before)=>{
+                const responded=fresh.feedback!==before.feedback||fresh.page_state!==before.page_state||fresh.question_key!==before.question_key||fresh.document_id!==before.document_id||
+                  (action==='answer_submit'&&fresh.navigation.some(n=>n.kind==='advance'&&!n.disabled&&!before.navigation.some(p=>p.kind==='advance'&&!p.disabled)));
+                gradedView=null;
+                if(!responded)return false;
+                if(fresh.slots.length>0||fresh.page_state!=='answering')return true;
+                if(action!=='check'||!(fresh.question_key!==before.question_key||fresh.document_id!==before.document_id)){emptySignature=null;return false}
+                const signature=fresh.question_key+'|'+fresh.document_id+'|'+fresh.question;
+                if(signature!==emptySignature){emptySignature=signature;emptySince=Date.now()}
+                if(readsLikeQuestion(fresh,before))gradedView='wording';else if(Date.now()-emptySince>=GRADED_VIEW_HOLD&&reloadedFrames(fresh,before).some(f=>f.tables?.length))gradedView='held';
+                return !!gradedView;
+              });
+              if(!settled.settled)throw new Fault('INPUT_NO_EFFECT',settled.replaced?`Check replaced the page's document but it did not settle within ${LIMITS.navigation/1000} s. It will not be repeated.`:'Check produced no new feedback. It will not be repeated.',{last_look:lastLook(settled.obs,obs)});
               obs=settled.obs;
               let kept=null;
               if(obs.question_key!==this.current.key){
@@ -1270,6 +1306,15 @@
                     this.current.key=obs.question_key;
                     this.repin(obs);
                   }
+                }
+                // Our own Check reloaded the question into a graded view with no answer controls at all. That is the
+                // question we just checked, read-only: with nothing to answer there is nothing to plan, so nothing can
+                // reach the model and nothing can be entered or skipped -- which is why this may be less strict than
+                // every other identity rule. The run goes on to look for Next on this page.
+                if(!kept.same&&action==='check'&&gradedView&&!obs.slots.length){
+                  await this.event('VERIFY',`The graded page shows no answer boxes (read-only; ${gradedView==='wording'?"it repeats the question's wording":`its table unchanged for ${GRADED_VIEW_HOLD/1000} s`}); it is the same question.`,{was:this.current.key,now:obs.question_key,graded_view:gradedView,document_replaced:settled.replaced});
+                  this.current.key=obs.question_key;
+                  this.repin(obs);
                 }
               }
               if(obs.question_key!==this.current.key){

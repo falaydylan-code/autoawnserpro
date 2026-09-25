@@ -1,7 +1,10 @@
 <!doctype html><meta charset="utf-8"><title>Question frame</title>
 <style>body{font:16px sans-serif;margin:12px}input{width:120px;padding:6px}output{display:block;margin-top:8px;color:#060}</style>
 <!-- The question frame of transitions.html. ?q=N picks the question; &graded=1 shows the grade; &stem=revised rewrites
-     the question wording; &slow=1 renders the answer field 800 ms after load; &stray=1 reloads the document as soon
+     the question wording; &readonly=1 shows the graded answer as plain text in a table, no input (McGraw's review
+     sheet, Ch.3 Q2 11:09 PM); &helper=1 adds the hidden textarea McGraw's tool keeps in the page; &blank=<ms> shows
+     nothing for that long first; &spinner=<ms> shows "Loading..." for that long first; &empty=1 never shows anything;
+     &slow=1 renders the answer field 800 ms after load; &stray=1 reloads the document as soon
      as a value is typed. Entered values are kept in the SHELL (parent.answers) so they survive a reload, as they do
      on the real site. The shell records every load in parent.loads. -->
 <main>
@@ -12,7 +15,7 @@
 <script>
 const p=new URLSearchParams(location.search);let n=Number(p.get('q')||1);
 // McGraw's accounting-tool frame has no <main>, no role=main, no question id: the harness's question root is <body>.
-if(p.get('bare')){const m=document.querySelector('main'),d=document.createElement('div');while(m.firstChild)d.appendChild(m.firstChild);m.replaceWith(d)}
+if(p.get('bare')){const m=document.querySelector('main'),d=document.createElement('div');d.id='qroot';while(m.firstChild)d.appendChild(m.firstChild);m.replaceWith(d)}
 parent.loads.push(location.search);
 function render(){body.innerHTML='<label>Amount <input id="amount" type="text"></label>';amount.value=p.get('wipe')?'':(parent.answers[n]||'');
   amount.addEventListener('input',()=>{parent.answers[n]=amount.value;if(p.get('stray'))location.reload()});}
@@ -28,4 +31,13 @@ if(p.get('pregrade'))document.body.classList.add('pregrade-mode');
 // a graded page that shows ONLY a verdict: its question wording is gone, so every question's graded page reads alike
 if(p.get('only'))stem.textContent='';
 if(p.get('banner'))(document.querySelector('main')||document.body).insertAdjacentHTML('afterbegin','<div>Answer is complete and correct.</div>');
+const root=document.querySelector('main')||document.getElementById('qroot');
+// McGraw's graded review sheet: the answer is plain text in a table, the verdict sits where no feedback rule looks
+if(p.get('readonly')){body.innerHTML=`<table id="sheet"><tr><th>Item</th><th>Amount</th></tr><tr><td>Item ${n}</td><td>${parent.answers[n]||''} selected answer correct</td></tr></table>`;
+  feedback.textContent='';root.insertAdjacentHTML('afterbegin','<div class="correctAnswer_progressbar"><p>Answer is complete and correct.</p></div>')}
+if(p.get('helper'))document.body.insertAdjacentHTML('beforeend','<textarea id="cell_text_format_editor" style="display:none"></textarea>');
+if(p.get('empty'))root.style.display='none';
+if(p.get('blank')){root.style.display='none';setTimeout(()=>root.style.display='',Number(p.get('blank')))}
+if(p.get('spinner')){root.style.display='none';const l=document.createElement('div');l.textContent='Loading...';document.body.appendChild(l);
+  setTimeout(()=>{l.remove();root.style.display=''},Number(p.get('spinner')))}
 </script>
